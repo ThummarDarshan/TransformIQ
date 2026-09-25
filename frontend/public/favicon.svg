@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+  <defs>
+    <linearGradient id="tqFaviconGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stopColor="#38bdf8" />
+      <stop offset="50%" stopColor="#818cf8" />
+      <stop offset="100%" stopColor="#34d399" />
+    </linearGradient>
+    <linearGradient id="tqFaviconGrad2" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stopColor="#c084fc" />
+      <stop offset="50%" stopColor="#60a5fa" />
+      <stop offset="100%" stopColor="#38bdf8" />
+    </linearGradient>
+  </defs>
+  <rect width="48" height="48" rx="12" fill="#0b1120" stroke="url(#tqFaviconGrad)" stroke-width="2" />
+  <line x1="14" y1="14" x2="24" y2="24" stroke="#38bdf8" stroke-width="2" stroke-linecap="round" />
+  <line x1="34" y1="14" x2="24" y2="24" stroke="#818cf8" stroke-width="2" stroke-linecap="round" />
+  <line x1="14" y1="34" x2="24" y2="24" stroke="#34d399" stroke-width="2" stroke-linecap="round" />
+  <line x1="24" y1="24" x2="34" y2="34" stroke="url(#tqFaviconGrad2)" stroke-width="2.5" stroke-linecap="round" />
+  <circle cx="14" cy="14" r="3.5" fill="#38bdf8" />
+  <circle cx="34" cy="14" r="3.5" fill="#818cf8" />
+  <circle cx="14" cy="34" r="3" fill="#34d399" />
+  <circle cx="34" cy="34" r="4" fill="#c084fc" />
+  <circle cx="24" cy="24" r="6" fill="#0f172a" stroke="#38bdf8" stroke-width="1.5" />
+  <circle cx="24" cy="24" r="3" fill="#38bdf8" />
+  <circle cx="24" cy="24" r="1.5" fill="#ffffff" />
+</svg>
