@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from pydantic import BaseModel, EmailStr
 from app.config.database import get_db
-from app.auth.deps import get_current_user, require_project_permission, get_user_project_role, record_audit_log
+from app.auth.deps import get_current_user, require_project_permission, get_user_project_role, record_audit_log, verify_project_access
 from app.auth.permissions import Permission, has_permission
 from app.models.user import User, Workspace, ProjectMember, Organization, UserRole
 from app.models.project import Project, ProjectStatus, BusinessContext
@@ -18,7 +18,7 @@ router = APIRouter(prefix="/projects", tags=["Projects"])
 
 class AddMemberRequest(BaseModel):
     user_id: Optional[str] = None
-    email: Optional[str] = None
+    email: Optional[EmailStr] = None
     role: str = UserRole.MEMBER.value
 
 @router.get("", response_model=ApiResponse)
@@ -27,28 +27,41 @@ async def list_projects(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    # Admin can view all projects in the system/org
-    if current_user.role in [UserRole.ADMIN.value, "ADMIN"]:
+    """Lists projects with strict organization and workspace tenant isolation."""
+    # Admin can view all projects in the platform
+    if (current_user.role or "").upper() == UserRole.ADMIN.value:
         query = select(Project)
         if workspace_id:
             query = query.filter(Project.workspace_id == workspace_id)
         result = await db.execute(query.order_by(Project.created_at.desc()))
-        projects = result.scalars().all()
+        projects = list(result.scalars().all())
     else:
-        # Get projects where user is explicitly a member or belongs to workspace/org
+        # 1. Projects where user is explicitly an assigned member
         member_projs_res = await db.execute(
             select(ProjectMember.project_id).filter(ProjectMember.user_id == current_user.id)
         )
-        allowed_ids = set(member_projs_res.scalars().all())
+        allowed_project_ids = set(member_projs_res.scalars().all())
         
+        # 2. Projects in workspaces of organizations owned by the user
+        org_res = await db.execute(select(Organization.id).filter(Organization.owner_id == current_user.id))
+        owned_org_ids = org_res.scalars().all()
+        if owned_org_ids:
+            ws_res = await db.execute(select(Workspace.id).filter(Workspace.organization_id.in_(owned_org_ids)))
+            owned_ws_ids = set(ws_res.scalars().all())
+        else:
+            owned_ws_ids = set()
+            
         query = select(Project)
         if workspace_id:
             query = query.filter(Project.workspace_id == workspace_id)
         result = await db.execute(query.order_by(Project.created_at.desc()))
         all_projs = result.scalars().all()
         
-        # If user is in default workspace or project member
-        projects = [p for p in all_projs if p.id in allowed_ids or current_user.role in [UserRole.PROJECT_OWNER.value, UserRole.MANAGER.value]]
+        # Enforce strict multi-tenant boundary: user must be explicit member or org owner
+        projects = [
+            p for p in all_projs
+            if p.id in allowed_project_ids or p.workspace_id in owned_ws_ids
+        ]
         
     data = []
     for p in projects:
@@ -72,40 +85,52 @@ async def create_project(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    slug = re.sub(r'[^a-z0-9]+', '-', req.name.lower()).strip('-') + f"-{str(uuid.uuid4())[:6]}"
+    clean_title = req.name.strip()
+    slug = re.sub(r'[^a-z0-9]+', '-', clean_title.lower()).strip('-') + f"-{str(uuid.uuid4())[:6]}"
     project_id = str(uuid.uuid4())
     
-    # Set workspace if not provided
+    # Resolve or create workspace
     ws_id = req.workspace_id
     if not ws_id or ws_id == "default-ws":
-        ws_res = await db.execute(select(Workspace))
+        # Find organization owned by user or default
+        org_res = await db.execute(select(Organization).filter(Organization.owner_id == current_user.id))
+        org = org_res.scalars().first()
+        if not org:
+            org = Organization(
+                id=str(uuid.uuid4()),
+                name=f"{current_user.full_name}'s Enterprise",
+                slug=f"org-{str(uuid.uuid4())[:8]}",
+                owner_id=current_user.id
+            )
+            db.add(org)
+            await db.flush()
+            
+        ws_res = await db.execute(select(Workspace).filter(Workspace.organization_id == org.id))
         ws = ws_res.scalars().first()
         if not ws:
-            # Create default workspace
-            org_res = await db.execute(select(Organization))
-            org = org_res.scalars().first()
-            if not org:
-                org = Organization(
-                    id=str(uuid.uuid4()),
-                    name="TransformIQ Enterprise",
-                    slug="transformiq-enterprise",
-                    owner_id=current_user.id
-                )
-                db.add(org)
-                await db.flush()
-                
             ws = Workspace(
                 id=str(uuid.uuid4()),
-                name="Default Transformation Workspace",
+                name="Main Transformation Workspace",
                 organization_id=org.id
             )
             db.add(ws)
             await db.flush()
         ws_id = ws.id
+    else:
+        # Validate workspace access if specific workspace_id provided
+        ws_res = await db.execute(select(Workspace).filter(Workspace.id == ws_id))
+        ws = ws_res.scalars().first()
+        if not ws:
+            raise HTTPException(status_code=404, detail="Specified workspace not found.")
+            
+        if (current_user.role or "").upper() != UserRole.ADMIN.value:
+            org_res = await db.execute(select(Organization).filter(Organization.id == ws.organization_id, Organization.owner_id == current_user.id))
+            if not org_res.scalars().first():
+                raise HTTPException(status_code=403, detail="Access denied: You cannot create projects in another organization's workspace.")
         
     project = Project(
         id=project_id,
-        name=req.name,
+        name=clean_title,
         slug=slug,
         description=req.description,
         workspace_id=ws_id,
@@ -135,7 +160,7 @@ async def create_project(
     ctx = BusinessContext(
         id=str(uuid.uuid4()),
         project_id=project_id,
-        summary=f"Project {req.name} in {req.industry} targeting {req.business_objective}."
+        summary=f"Project {clean_title} in {req.industry} targeting {req.business_objective}."
     )
     db.add(ctx)
     
@@ -226,7 +251,7 @@ async def add_project_member(
         u_res = await db.execute(select(User).filter(User.id == payload.user_id))
         target_user = u_res.scalars().first()
     elif payload.email:
-        u_res = await db.execute(select(User).filter(User.email == payload.email))
+        u_res = await db.execute(select(User).filter(User.email == str(payload.email).strip().lower()))
         target_user = u_res.scalars().first()
         
     if not target_user:

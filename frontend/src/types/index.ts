@@ -62,6 +62,17 @@ export interface ChatMessage {
   created_at?: string;
 }
 
+export interface ProvenanceMetadata {
+  provenance_type: 'DIRECT' | 'DERIVED' | 'RECOMMENDED';
+  source_code: string;
+  document_name: string;
+  page_number?: number;
+  section_heading?: string;
+  exact_text: string;
+  derivation_rationale: string;
+  confidence_score?: number;
+}
+
 export interface Requirement {
   code: string;
   title: string;
@@ -69,6 +80,55 @@ export interface Requirement {
   req_type: string;
   priority: string;
   source?: string;
+  provenance?: ProvenanceMetadata;
+}
+
+export interface SourceEvidenceItem {
+  id: string;
+  project_id: string;
+  document_id?: string;
+  source_code: string;
+  source_type: string;
+  document_name: string;
+  page_number?: number;
+  section_heading?: string;
+  paragraph_number?: number;
+  start_offset?: number;
+  end_offset?: number;
+  exact_text: string;
+  source_url?: string;
+  metadata?: Record<string, any>;
+  created_at: string;
+  linked_artifacts?: Array<{
+    artifact_type: string;
+    artifact_id: string;
+    provenance_type: string;
+    derivation_rationale: string;
+  }>;
+}
+
+export interface TraceabilityMatrixItem {
+  artifact_type: string;
+  artifact_id: string;
+  artifact_title: string;
+  provenance_type: 'DIRECT' | 'DERIVED' | 'RECOMMENDED';
+  derivation_rationale: string;
+  confidence_score: number;
+  source_code: string;
+  document_name: string;
+  page_number?: number;
+  section_heading?: string;
+  exact_text: string;
+}
+
+export interface TraceabilityMatrixData {
+  project_id: string;
+  total_artifacts: number;
+  direct_count: number;
+  derived_count: number;
+  recommended_count: number;
+  traceability_coverage_pct: number;
+  matrix: TraceabilityMatrixItem[];
 }
 
 export interface Stakeholder {
@@ -112,8 +172,9 @@ export interface GapItem {
   desired_state: string;
   severity: string;
   impact: string;
-  root_cause: string;
+  root_cause?: string;
   recommended_action: string;
+  provenance?: ProvenanceMetadata;
 }
 
 export interface GapAnalysisData {
@@ -379,6 +440,15 @@ export interface MasterBlueprintData {
   business_problem: string;
   objectives: string[];
   transformation_score: TransformationScoreData;
+  traceability_summary?: {
+    total_evidence_sources: number;
+    total_linked_items: number;
+    direct_citations_count: number;
+    derived_citations_count: number;
+    recommended_count: number;
+    coverage_percentage: number;
+    verification_status: string;
+  };
   key_gaps: GapItem[];
   recommended_solution: {
     name: string;
@@ -429,4 +499,79 @@ export interface MasterBlueprintData {
   approval_status: string;
   reviewed_by?: string;
   decision_date?: string;
+  confirmed_clarifications?: Array<{
+    id: string;
+    title: string;
+    category: string;
+    clarification: string;
+    confirmed_at?: string;
+  }>;
+  what_i_couldnt_figure_out?: {
+    total_uncertainties: number;
+    unconfirmed_count: number;
+    confirmed_count: number;
+    critical_high_count: number;
+    has_critical_unknowns: boolean;
+    items: UncertaintyItem[];
+  };
 }
+
+export type UncertaintyCategory =
+  | 'BUSINESS_RULE'
+  | 'USER_ROLE'
+  | 'WORKFLOW'
+  | 'DATA'
+  | 'INTEGRATION'
+  | 'SECURITY'
+  | 'COMPLIANCE'
+  | 'PERFORMANCE'
+  | 'UI_UX'
+  | 'TECHNICAL_CONSTRAINT'
+  | 'SUCCESS_METRIC'
+  | 'SCOPE'
+  | 'TIMELINE'
+  | 'BUDGET'
+  | 'OTHER';
+
+export type UncertaintySeverity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+export type UncertaintyStatus = 'UNCONFIRMED' | 'CONFIRMED' | 'REJECTED' | 'RESOLVED';
+
+export interface UncertaintyItem {
+  id: string;
+  project_id?: string;
+  title: string;
+  category: UncertaintyCategory | string;
+  severity: UncertaintySeverity | string;
+  status: UncertaintyStatus | string;
+  what_is_unclear: string;
+  why_unclear?: string;
+  source_evidence_id?: string;
+  source_code?: string;
+  document_name?: string;
+  page_number?: number;
+  section_heading?: string;
+  evidence_text?: string;
+  assumption: string;
+  is_high_risk_assumption?: boolean;
+  what_to_confirm: string;
+  potential_impact: string;
+  user_clarification?: string;
+  confirmed_by_id?: string;
+  confirmed_at?: string;
+  resolution_action?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface UncertaintyStats {
+  total_count: number;
+  unconfirmed_count: number;
+  confirmed_count: number;
+  resolved_count: number;
+  rejected_count: number;
+  critical_count: number;
+  high_count: number;
+  medium_count: number;
+  low_count: number;
+}
+

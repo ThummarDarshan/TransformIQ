@@ -209,7 +209,7 @@ export const GapAnalysisPage: React.FC = () => {
                 {/* ROOT CAUSE & IMPACT */}
                 <div className="space-y-1.5 text-xs text-slate-400 mb-4">
                   <p><b className="text-slate-300">{t('Impact:', 'Impact:')}</b> {t(gap.impact, gap.impact)}</p>
-                  <p><b className="text-slate-300">{t('Root Cause:', 'Root Cause:')}</b> {t(gap.root_cause, gap.root_cause)}</p>
+                  <p><b className="text-slate-300">{t('Root Cause:', 'Root Cause:')}</b> {t(gap.root_cause || '', gap.root_cause || '')}</p>
                 </div>
               </div>
 

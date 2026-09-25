@@ -7,7 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from app.config.database import get_db
 from fastapi.security import HTTPAuthorizationCredentials
-from app.auth.deps import get_current_user, verify_project_access, security_scheme
+from app.auth.deps import get_current_user, verify_project_access, security_scheme, get_user_project_role
+from app.auth.permissions import Permission, has_permission
 from app.auth.security import decode_access_token
 from app.models.user import User
 from app.models.project import Project
@@ -119,6 +120,12 @@ async def generate_export_job(
     db: AsyncSession = Depends(get_db)
 ):
     project = await verify_project_access(req.project_id, current_user, db)
+    role = await get_user_project_role(project.id, current_user, db)
+    if not role or not has_permission(role, Permission.EXPORT_CREATE):
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: You do not have permission to export project artifacts."
+        )
     
     # Gather project data for exporter
     gaps_res = await db.execute(select(Gap).filter(Gap.project_id == project.id))
@@ -127,7 +134,7 @@ async def generate_export_job(
     sol_res = await db.execute(select(Solution).filter(Solution.project_id == project.id))
     sol = sol_res.scalars().first()
     
-    export_dir = "./exports_generated"
+    export_dir = os.path.abspath("./exports_generated")
     os.makedirs(export_dir, exist_ok=True)
     
     export_data = {

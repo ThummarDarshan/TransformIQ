@@ -36,9 +36,12 @@ async def get_architecture(
     
     if not comps:
         result = await orchestrator.generate_architecture(context_data)
+        comp_id_map = {}
         for c in result.get("components", []):
+            unique_c_id = f"{project.id[:8]}_{c['id']}"
+            comp_id_map[c["id"]] = unique_c_id
             db.add(ArchitectureComponent(
-                id=c["id"],
+                id=unique_c_id,
                 project_id=project.id,
                 name=c["name"],
                 layer=c["layer"],
@@ -52,8 +55,8 @@ async def get_architecture(
             db.add(ArchitectureConnection(
                 id=str(uuid.uuid4()),
                 project_id=project.id,
-                source_component_id=cn["source"],
-                target_component_id=cn["target"],
+                source_component_id=comp_id_map.get(cn["source"], cn["source"]),
+                target_component_id=comp_id_map.get(cn["target"], cn["target"]),
                 protocol=cn["protocol"],
                 data_payload=cn.get("data_payload"),
                 is_async=cn.get("is_async", False)
@@ -126,9 +129,12 @@ async def generate_architecture(
     for ocn in old_conns.scalars().all():
         await db.delete(ocn)
         
+    comp_id_map = {}
     for c in result.get("components", []):
+        unique_c_id = f"{project.id[:8]}_{c['id']}"
+        comp_id_map[c["id"]] = unique_c_id
         db.add(ArchitectureComponent(
-            id=c["id"],
+            id=unique_c_id,
             project_id=project.id,
             name=c["name"],
             layer=c["layer"],
@@ -143,8 +149,8 @@ async def generate_architecture(
         db.add(ArchitectureConnection(
             id=str(uuid.uuid4()),
             project_id=project.id,
-            source_component_id=cn["source"],
-            target_component_id=cn["target"],
+            source_component_id=comp_id_map.get(cn["source"], cn["source"]),
+            target_component_id=comp_id_map.get(cn["target"], cn["target"]),
             protocol=cn["protocol"],
             data_payload=cn.get("data_payload"),
             is_async=cn.get("is_async", False)
@@ -177,13 +183,14 @@ async def save_architecture_layout(
     
     for item in layout_data:
         c_id = item.get("id")
+        # Try both direct id and mapped unique id
+        target = comps.get(c_id) or comps.get(f"{project.id[:8]}_{c_id}")
         pos = item.get("position", {})
-        if c_id in comps and isinstance(pos, dict):
+        if target and isinstance(pos, dict):
             if "x" in pos:
-                comps[c_id].position_x = float(pos["x"])
+                target.position_x = float(pos["x"])
             if "y" in pos:
-                comps[c_id].position_y = float(pos["y"])
+                target.position_y = float(pos["y"])
                 
     await db.commit()
     return ApiResponse(success=True, data={"saved_count": len(layout_data)}, message="Architecture layout saved successfully")
-

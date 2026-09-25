@@ -74,6 +74,8 @@ class Project(Base):
     audit_logs = relationship("AuditLog", back_populates="project", cascade="all, delete-orphan")
     exports = relationship("ExportJob", back_populates="project", cascade="all, delete-orphan")
     ai_runs = relationship("AIRun", back_populates="project", cascade="all, delete-orphan")
+    source_evidences = relationship("SourceEvidence", back_populates="project", cascade="all, delete-orphan")
+    uncertainties = relationship("RequirementUncertainty", back_populates="project", cascade="all, delete-orphan")
 
 class BusinessContext(Base):
     __tablename__ = "business_contexts"
@@ -107,6 +109,7 @@ class Document(Base):
     
     project = relationship("Project", back_populates="documents")
     chunks = relationship("DocumentChunk", back_populates="document", cascade="all, delete-orphan")
+    source_evidences = relationship("SourceEvidence", back_populates="document", cascade="all, delete-orphan")
 
 class DocumentChunk(Base):
     __tablename__ = "document_chunks"

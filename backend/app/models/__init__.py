@@ -8,6 +8,12 @@ from app.models.planning import Roadmap, Estimate, Risk, TransformationScore, Si
 from app.models.collaboration import (
     Conversation, Message, Approval, Comment, Version, Notification, AuditLog, AIRun, ExportJob
 )
+from app.models.provenance import (
+    SourceEvidence, ArtifactProvenance, ProvenanceType, SourceType
+)
+from app.models.uncertainty import (
+    RequirementUncertainty, UncertaintyCategory, UncertaintySeverity, UncertaintyStatus
+)
 
 __all__ = [
     "Base",
@@ -49,4 +55,12 @@ __all__ = [
     "AuditLog",
     "AIRun",
     "ExportJob",
+    "SourceEvidence",
+    "ArtifactProvenance",
+    "ProvenanceType",
+    "SourceType",
+    "RequirementUncertainty",
+    "UncertaintyCategory",
+    "UncertaintySeverity",
+    "UncertaintyStatus",
 ]

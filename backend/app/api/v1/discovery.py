@@ -354,7 +354,9 @@ async def chat_with_ai_companion(
                     "content": c[0].content,
                     "filename": c[1],
                     "page_number": c[0].page_number or 1,
-                    "chunk_index": c[0].chunk_index
+                    "chunk_index": c[0].chunk_index,
+                    "source_code": (c[0].metadata_json or {}).get("source_code") or f"SRC-{c[0].chunk_index+1:03d}",
+                    "section_heading": (c[0].metadata_json or {}).get("section_heading")
                 }
                 for c in all_chunks_raw
             ]
@@ -362,9 +364,11 @@ async def chat_with_ai_companion(
                 relevant_chunks = search_relevant_chunks(chunk_dicts, req.message, top_k=settings.RAG_TOP_K)
                 if relevant_chunks:
                     rag_snippets = []
-                    for idx, chk in enumerate(relevant_chunks):
+                    for chk in relevant_chunks:
+                        heading_info = f", Section: \"{chk['section_heading']}\"" if chk.get("section_heading") else ""
                         rag_snippets.append(
-                            f"[Source #{idx+1}: {chk['filename']} (Page {chk['page_number']})]\n{chk['content']}"
+                            f"[{chk['source_code']}] Document: {chk['filename']} (Page {chk['page_number']}{heading_info})\n"
+                            f"Evidence Text: \"{chk['content']}\""
                         )
                     rag_context = "\n\n".join(rag_snippets)
         except Exception as e:

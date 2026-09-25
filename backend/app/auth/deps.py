@@ -1,12 +1,12 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List, Union
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from app.config.database import get_db
-from app.auth.security import decode_access_token
+from app.auth.security import decode_access_token, is_token_revoked
 from app.models.user import User, UserRole, Organization, Workspace, ProjectMember
 from app.models.project import Project
 from app.models.collaboration import AuditLog
@@ -26,6 +26,13 @@ async def get_current_user(
         )
     
     token = credentials.credentials
+    if is_token_revoked(token):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has been revoked or session has been logged out.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     payload = decode_access_token(token)
     if not payload:
         raise HTTPException(
@@ -52,7 +59,7 @@ async def get_current_user(
 
 async def require_admin(current_user: User = Depends(get_current_user)) -> User:
     """Enforces ADMIN role for platform & governance APIs."""
-    if current_user.role != UserRole.ADMIN.value and current_user.role != "ADMIN":
+    if (current_user.role or "").upper() != UserRole.ADMIN.value:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin privileges required to access this resource."
@@ -64,8 +71,15 @@ async def get_user_project_role(
     user: User,
     db: AsyncSession
 ) -> Optional[str]:
-    """Resolves the user's role for a specific project, checking ownership and membership."""
-    if user.role in [UserRole.ADMIN.value, "ADMIN"]:
+    """
+    Resolves the user's role for a specific project.
+    Strict tenant isolation:
+    1. System ADMIN -> full access.
+    2. Explicit Project Membership -> assigned project role.
+    3. Workspace / Organization Owner -> PROJECT_OWNER role.
+    4. Otherwise -> None (Access Forbidden). NEVER fall back to system role across boundaries!
+    """
+    if (user.role or "").upper() == UserRole.ADMIN.value:
         return UserRole.ADMIN.value
     
     # 1. Check explicit project membership
@@ -79,7 +93,7 @@ async def get_user_project_role(
     if membership:
         return membership.role
         
-    # 2. Check if user is the organization/workspace owner of the project
+    # 2. Check if user is the organization owner of the workspace containing the project
     proj_res = await db.execute(select(Project).filter(Project.id == project_id))
     project = proj_res.scalars().first()
     if not project:
@@ -93,15 +107,16 @@ async def get_user_project_role(
         if org and org.owner_id == user.id:
             return UserRole.PROJECT_OWNER.value
             
-    # 3. Fallback to system role
-    return user.role
+    # 3. User is neither a member nor organization owner of this project
+    return None
 
 async def _resolve_project(project_id: str, current_user: User, db: AsyncSession) -> Optional[Project]:
     if project_id == "default":
-        if current_user.role in [UserRole.ADMIN.value, "ADMIN"]:
+        if (current_user.role or "").upper() == UserRole.ADMIN.value:
             proj_res = await db.execute(select(Project).order_by(Project.created_at.desc()))
             return proj_res.scalars().first()
         else:
+            # Check user memberships
             member_res = await db.execute(
                 select(ProjectMember.project_id).filter(ProjectMember.user_id == current_user.id)
             )
@@ -110,13 +125,22 @@ async def _resolve_project(project_id: str, current_user: User, db: AsyncSession
                 proj_res = await db.execute(
                     select(Project).filter(Project.id.in_(member_pids)).order_by(Project.created_at.desc())
                 )
-                return proj_res.scalars().first()
-            elif current_user.role in [UserRole.PROJECT_OWNER.value, UserRole.MANAGER.value]:
-                proj_res = await db.execute(select(Project).order_by(Project.created_at.desc()))
-                return proj_res.scalars().first()
-            else:
-                proj_res = await db.execute(select(Project).order_by(Project.created_at.desc()))
-                return proj_res.scalars().first()
+                p = proj_res.scalars().first()
+                if p:
+                    return p
+            
+            # Check user owned orgs
+            org_res = await db.execute(select(Organization.id).filter(Organization.owner_id == current_user.id))
+            org_ids = org_res.scalars().all()
+            if org_ids:
+                ws_res = await db.execute(select(Workspace.id).filter(Workspace.organization_id.in_(org_ids)))
+                ws_ids = ws_res.scalars().all()
+                if ws_ids:
+                    proj_res = await db.execute(
+                        select(Project).filter(Project.workspace_id.in_(ws_ids)).order_by(Project.created_at.desc())
+                    )
+                    return proj_res.scalars().first()
+            return None
     else:
         proj_res = await db.execute(select(Project).filter(Project.id == project_id))
         return proj_res.scalars().first()
@@ -126,7 +150,7 @@ async def verify_project_access(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ) -> Project:
-    """Verifies that the current user has access to the given project."""
+    """Verifies that the current user has access to the given project and enforces tenant isolation."""
     project = await _resolve_project(project_id, current_user, db)
     if not project:
         raise HTTPException(
@@ -137,7 +161,7 @@ async def verify_project_access(
     if not role:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. You are not a member of this project or organization."
+            detail="Access denied: You do not have permission to access this project or organization."
         )
     return project
 
@@ -161,7 +185,7 @@ def require_project_permission(permission: Union[Permission, str]):
         if not role:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied. You are not a member of this project or organization."
+                detail="Access denied: You do not have permission to access this project or organization."
             )
             
         perm_key = permission.value if isinstance(permission, Permission) else permission
@@ -189,7 +213,11 @@ async def record_audit_log(
     request: Optional[Request] = None
 ):
     """Utility to persist immutable governance audit log entries."""
-    ip_addr = request.client.host if request and request.client else "127.0.0.1"
+    ip_addr = "127.0.0.1"
+    if request:
+        client_host = request.client.host if request.client else None
+        forwarded_for = request.headers.get("X-Forwarded-For")
+        ip_addr = forwarded_for.split(",")[0].strip() if forwarded_for else (client_host or "127.0.0.1")
     
     log = AuditLog(
         id=str(uuid.uuid4()),

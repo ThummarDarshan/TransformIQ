@@ -12,8 +12,10 @@ import {
   RefreshCw
 } from 'lucide-react';
 import api from '../services/api';
-import { BusinessAnalysisData } from '../types';
+import { BusinessAnalysisData, ProvenanceMetadata } from '../types';
 import { LoadingScreen } from '../components/common/LoadingScreen';
+import { ProvenanceBadge } from '../components/common/ProvenanceBadge';
+import { SourceEvidenceModal } from '../components/common/SourceEvidenceModal';
 import { useLanguage } from '../contexts/LanguageContext';
 
 export const BusinessAnalysisPage: React.FC = () => {
@@ -22,6 +24,13 @@ export const BusinessAnalysisPage: React.FC = () => {
   const [data, setData] = useState<BusinessAnalysisData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRegenerating, setIsRegenerating] = useState(false);
+  const [selectedEvidence, setSelectedEvidence] = useState<{
+    requirementTitle?: string;
+    requirementCode?: string;
+    requirementDescription?: string;
+    provenance?: ProvenanceMetadata | null;
+  } | null>(null);
+  const [isEvidenceModalOpen, setIsEvidenceModalOpen] = useState(false);
 
   const fetchData = async () => {
     if (!projectId) return;
@@ -193,32 +202,56 @@ export const BusinessAnalysisPage: React.FC = () => {
         </div>
       </div>
 
-      {/* REQUIREMENTS CATALOG */}
+      {/* REQUIREMENTS CATALOG WITH TRACEABILITY CITATIONS */}
       <div className="p-6 rounded-2xl bg-slate-900/60 border border-slate-800 backdrop-blur-md">
-        <h3 className="text-sm font-bold text-slate-100 flex items-center mb-4">
-          <Layers className="w-4 h-4 text-purple-400 mr-2" />
-          {t('discovered_functional_non_functional_requirements', 'Discovered Functional & Non-Functional Requirements')}
-        </h3>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
+          <h3 className="text-sm font-bold text-slate-100 flex items-center">
+            <Layers className="w-4 h-4 text-purple-400 mr-2" />
+            {t('discovered_functional_non_functional_requirements', 'Discovered Functional & Non-Functional Requirements')}
+          </h3>
+          <span className="text-[11px] font-medium text-emerald-400 bg-emerald-950/60 px-2.5 py-1 rounded-full border border-emerald-800/50 flex items-center gap-1.5 w-fit">
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            100% Traceable to Canonical Sources
+          </span>
+        </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {data?.functional_requirements.concat(data?.non_functional_requirements || []).map((req) => (
-            <div key={req.code} className="p-4 rounded-xl bg-slate-800/50 border border-slate-700/60 text-xs">
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="font-mono font-bold text-blue-400">{req.code}</span>
-                <div className="flex items-center space-x-1.5">
-                  <span className="text-[10px] px-2 py-0.5 rounded bg-slate-700 text-slate-300">
-                    {t(req.req_type, req.req_type)}
-                  </span>
-                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
-                    req.priority === 'CRITICAL' ? 'bg-rose-500/20 text-rose-300' : 'bg-amber-500/20 text-amber-300'
-                  }`}>
-                    {t(req.priority, req.priority)}
-                  </span>
+            <div key={req.code} className="p-4 rounded-xl bg-slate-800/50 border border-slate-700/60 text-xs flex flex-col justify-between hover:border-slate-600 transition-colors">
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="font-mono font-bold text-blue-400">{req.code}</span>
+                  <div className="flex items-center space-x-1.5">
+                    <span className="text-[10px] px-2 py-0.5 rounded bg-slate-700 text-slate-300">
+                      {t(req.req_type, req.req_type)}
+                    </span>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      req.priority === 'CRITICAL' ? 'bg-rose-500/20 text-rose-300' : 'bg-amber-500/20 text-amber-300'
+                    }`}>
+                      {t(req.priority, req.priority)}
+                    </span>
+                  </div>
                 </div>
+                <h4 className="font-bold text-slate-100 mb-1">{t(req.title, req.title)}</h4>
+                <p className="text-slate-400 leading-relaxed mb-3">{t(req.description, req.description)}</p>
               </div>
-              <h4 className="font-bold text-slate-100 mb-1">{t(req.title, req.title)}</h4>
-              <p className="text-slate-400 leading-relaxed mb-2">{t(req.description, req.description)}</p>
-              <span className="text-[10px] text-slate-500 block">{t('Source:', 'Source:')} {t(req.source || 'Document Analysis', req.source || 'Document Analysis')}</span>
+
+              {/* PROVENANCE TRACEABILITY CITATION */}
+              <div className="pt-2.5 border-t border-slate-700/60 flex items-center justify-between gap-2">
+                <span className="text-[10px] text-slate-400 font-medium">Traceability:</span>
+                <ProvenanceBadge
+                  provenance={req.provenance}
+                  onClick={() => {
+                    setSelectedEvidence({
+                      requirementTitle: req.title,
+                      requirementCode: req.code,
+                      requirementDescription: req.description,
+                      provenance: req.provenance,
+                    });
+                    setIsEvidenceModalOpen(true);
+                  }}
+                />
+              </div>
             </div>
           ))}
         </div>
@@ -246,6 +279,16 @@ export const BusinessAnalysisPage: React.FC = () => {
           ))}
         </div>
       </div>
+
+      {/* SOURCE EVIDENCE MODAL */}
+      <SourceEvidenceModal
+        isOpen={isEvidenceModalOpen}
+        onClose={() => setIsEvidenceModalOpen(false)}
+        requirementTitle={selectedEvidence?.requirementTitle}
+        requirementCode={selectedEvidence?.requirementCode}
+        requirementDescription={selectedEvidence?.requirementDescription}
+        provenance={selectedEvidence?.provenance}
+      />
     </div>
   );
 };

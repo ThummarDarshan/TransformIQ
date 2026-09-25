@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from app.models.user import User, Organization, Workspace, ProjectMember, UserRole
@@ -61,41 +61,39 @@ async def seed_database(db: AsyncSession):
     db.add(workspace)
     await db.flush()
 
-    # 3. Flagship Project: Customer Support Transformation
-    project_id = str(uuid.uuid4())
+    # 3. Create Demo Project
     project = Project(
-        id=project_id,
-        name="Customer Support Transformation",
-        slug="customer-support-transformation",
-        description="Autonomous AI transformation of multi-channel customer complaint triage, sentiment routing, and SOP-grounded resolution.",
+        id=str(uuid.uuid4()),
+        name="Omni-Channel Customer Complaint & Triage Transformation",
+        slug="omni-channel-customer-complaint-transformation",
+        description="Enterprise transformation to automate customer complaint ingestion, categorization, sentiment extraction, and autonomous department routing.",
         workspace_id=workspace.id,
         status=ProjectStatus.ANALYSIS.value,
-        industry="E-Commerce & Retail",
-        organization_size="5,000+ Employees",
-        business_objective="Automate 75%+ of customer complaint classification, reduce average response time from 48 hours to under 15 minutes, and eliminate $400k+ in annual manual triage overhead.",
-        business_problem="An e-commerce enterprise receives 45,000+ customer complaints and inquiries monthly. Support agents spend 65% of their working hours manually reading emails, determining urgency, and re-keying data into 4 disconnected internal CRMs. This creates severe 48-hour backlogs, an 18% misrouting error rate, and poor CSAT scores during peak sales seasons.",
-        current_systems="Zendesk Legacy Ticket Queue, Oracle ERP 11i, Static PDF SOP files on SharePoint, MySQL Order DB.",
-        expected_outcome="Sub-second AI intent & sentiment classification, automated department routing, vector knowledge retrieval for agent assistance, and a human-in-the-loop exception queue.",
-        constraints="Budget capped at $150,000. Must achieve SOC2 & GDPR compliance with full audit logging and RBAC.",
-        budget=150000.0,
+        industry="Retail & E-Commerce",
+        organization_size="5,000 Employees",
+        business_objective="Reduce initial complaint triage latency from 48 hours to under 15 minutes, eliminate manual misrouting, and achieve 75%+ straight-through automated resolution for tier-1 cases.",
+        business_problem="Customer complaints received across email, web forms, and Zendesk are manually reviewed by 14 triage agents. High human error (18% misroute rate), high turnover, and delayed resolutions cause $1.2M in annual customer churn.",
+        current_systems="Zendesk Enterprise, Salesforce Service Cloud, Legacy SQL Server 2012, Shared Outlook Inboxes, Manual Excel Logs.",
+        expected_outcome="Autonomous AI classification pipeline, multi-tenant agent copilot, automated SLA escalations, sub-second vector search over SOPs.",
+        constraints="Must comply with GDPR/CCPA for PII redaction, 99.9% uptime SLA, integrate with legacy on-prem CRM via REST adapters.",
+        budget=185000.0,
         timeline_months=4
     )
     db.add(project)
     await db.flush()
 
-    # Member link
+    # Membership
     member = ProjectMember(
         id=str(uuid.uuid4()),
         project_id=project.id,
         user_id=demo_user.id,
-        role=UserRole.ARCHITECT.value
+        role=UserRole.PROJECT_OWNER.value
     )
     db.add(member)
 
-    # 4. Ingested Demo Document
-    doc_id = str(uuid.uuid4())
+    # 4. Ingest Sample Document & Chunks
     doc = Document(
-        id=doc_id,
+        id=str(uuid.uuid4()),
         project_id=project.id,
         filename="Customer_Support_SOP_and_BRD_v2.pdf",
         file_type="pdf",
@@ -127,7 +125,7 @@ async def seed_database(db: AsyncSession):
     }
     
     ba = smart_engine.build_contextual_business_analysis(ctx_data)
-    for r in ba["functional_requirements"] + ba["non_functional_requirements"]:
+    for r in ba.get("functional_requirements", []) + ba.get("non_functional_requirements", []):
         db.add(Requirement(
             id=str(uuid.uuid4()),
             project_id=project.id,
@@ -139,7 +137,7 @@ async def seed_database(db: AsyncSession):
             source=r["source"],
             confidence=0.95
         ))
-    for s in ba["stakeholders"]:
+    for s in ba.get("stakeholders", []):
         db.add(Stakeholder(
             id=str(uuid.uuid4()),
             project_id=project.id,
@@ -155,7 +153,7 @@ async def seed_database(db: AsyncSession):
         project_id=project.id,
         name="Customer Complaint Triage & Resolution",
         description="AS-IS manual routing vs TO-BE autonomous AI workflow.",
-        as_is_steps=ba["as_is_process"],
+        as_is_steps=ba.get("as_is_process", []),
         cycle_time_current="48 Hours",
         cycle_time_projected="12 Minutes",
         bottlenecks=["Manual email triage officer delay", "Subjective department classification errors"]
@@ -163,55 +161,58 @@ async def seed_database(db: AsyncSession):
 
     # 6. Gaps
     gap_data = smart_engine.build_contextual_gap_analysis(ctx_data)
-    for g in gap_data["gaps"]:
+    for g in gap_data.get("gaps", []):
         db.add(Gap(
             id=str(uuid.uuid4()),
             project_id=project.id,
-            category=g["category"],
-            title=g["title"],
-            current_state=g["current_state"],
-            desired_state=g["desired_state"],
-            severity=g["severity"],
-            impact=g["impact"],
-            root_cause=g["root_cause"],
-            recommended_action=g["recommended_action"]
+            category=g.get("category", "Process"),
+            title=g.get("title") or g.get("gap_title", "Identified Gap"),
+            current_state=g.get("current_state", "Manual operations"),
+            desired_state=g.get("desired_state", "Automated operations"),
+            severity=g.get("severity", "MEDIUM"),
+            impact=g.get("impact", "Operational latency"),
+            root_cause=g.get("root_cause", "Legacy system limitations"),
+            recommended_action=g.get("recommended_action", "Implement automation")
         ))
 
     # 7. Recommendations & Solution
     rec_data = smart_engine.build_contextual_recommendations(ctx_data)
-    for rc in rec_data["recommendations"]:
+    for rc in rec_data.get("recommendations", []):
         db.add(Recommendation(
             id=str(uuid.uuid4()),
             project_id=project.id,
-            category=rc["category"],
-            title=rc["title"],
-            description=rc["description"],
-            reason=rc["reason"],
-            expected_impact=rc["expected_impact"],
-            feasibility=rc["feasibility"],
-            priority=rc["priority"],
-            confidence_score=rc["confidence_score"],
-            source_citation=rc["source_citation"],
-            dependencies=rc["dependencies"],
+            category=rc.get("category", "General"),
+            title=rc.get("title", "Transformation Recommendation"),
+            description=rc.get("description", "Recommended architectural upgrade"),
+            reason=rc.get("reason", "Improves operational efficiency"),
+            expected_impact=rc.get("expected_impact", "HIGH"),
+            feasibility=rc.get("feasibility", "HIGH"),
+            priority=rc.get("priority", "HIGH"),
+            confidence_score=rc.get("confidence_score", 0.95),
+            source_citation=rc.get("source_citation", "Enterprise Requirements"),
+            dependencies=rc.get("dependencies", []),
             status="APPROVED"
         ))
     db.add(Solution(
         id=str(uuid.uuid4()),
         project_id=project.id,
-        name=rec_data["recommended_solution_name"],
-        tagline=rec_data["tagline"],
-        executive_summary=rec_data["executive_summary"],
-        technology_stack=rec_data["technology_stack"],
-        key_capabilities=rec_data["key_capabilities"],
-        expected_roi=rec_data["expected_roi"],
+        name=rec_data.get("recommended_solution_name", "Enterprise Solution"),
+        tagline=rec_data.get("tagline", "Digital Transformation Engine"),
+        executive_summary=rec_data.get("executive_summary", "Solution architecture"),
+        technology_stack=rec_data.get("technology_stack", {}),
+        key_capabilities=rec_data.get("key_capabilities", []),
+        expected_roi=rec_data.get("expected_roi", "300% ROI"),
         implementation_approach="Phased agile rollout across 4 sprints with canary model deployment."
     ))
 
     # 8. Architecture Components & Connections
     arch_data = smart_engine.build_contextual_architecture(ctx_data)
-    for comp in arch_data["components"]:
+    comp_map = {}
+    for comp in arch_data.get("components", []):
+        unique_id = f"{project.id[:8]}_{comp['id']}"
+        comp_map[comp["id"]] = unique_id
         db.add(ArchitectureComponent(
-            id=comp["id"],
+            id=unique_id,
             project_id=project.id,
             name=comp["name"],
             layer=comp["layer"],
@@ -221,22 +222,22 @@ async def seed_database(db: AsyncSession):
             position_x=comp["position_x"],
             position_y=comp["position_y"]
         ))
-    for conn in arch_data["connections"]:
+    for conn in arch_data.get("connections", []):
         db.add(ArchitectureConnection(
             id=str(uuid.uuid4()),
             project_id=project.id,
-            source_component_id=conn["source"],
-            target_component_id=conn["target"],
+            source_component_id=comp_map.get(conn["source"], conn["source"]),
+            target_component_id=comp_map.get(conn["target"], conn["target"]),
             protocol=conn["protocol"],
-            data_payload=conn["data_payload"],
-            is_async=conn["is_async"]
+            data_payload=conn.get("data_payload"),
+            is_async=conn.get("is_async", False)
         ))
 
     # 9. Workflow Nodes & Edges
     wf_data = smart_engine.build_contextual_process_workflow(ctx_data)
-    for node in wf_data["nodes"]:
+    for node in wf_data.get("nodes", []):
         db.add(WorkflowNode(
-            id=node["id"],
+            id=f"{project.id[:8]}_{node['id']}",
             project_id=project.id,
             node_key=node["node_key"],
             node_type=node["node_type"],
@@ -250,7 +251,7 @@ async def seed_database(db: AsyncSession):
             position_x=node["position_x"],
             position_y=node["position_y"]
         ))
-    for edge in wf_data["edges"]:
+    for edge in wf_data.get("edges", []):
         db.add(WorkflowEdge(
             id=str(uuid.uuid4()),
             project_id=project.id,
@@ -262,7 +263,7 @@ async def seed_database(db: AsyncSession):
 
     # 10. Database, APIs & UX Wireframes
     db_data = smart_engine.build_contextual_database(ctx_data)
-    for ent in db_data["entities"]:
+    for ent in db_data.get("entities", []):
         db.add(DatabaseEntity(
             id=str(uuid.uuid4()),
             project_id=project.id,
@@ -274,7 +275,7 @@ async def seed_database(db: AsyncSession):
         ))
 
     api_data = smart_engine.build_contextual_apis(ctx_data)
-    for ep in api_data["endpoints"]:
+    for ep in api_data.get("endpoints", []):
         db.add(ApiEndpoint(
             id=str(uuid.uuid4()),
             project_id=project.id,
@@ -290,7 +291,7 @@ async def seed_database(db: AsyncSession):
         ))
 
     ux_data = smart_engine.build_contextual_ux(ctx_data)
-    for wf in ux_data["wireframes"]:
+    for wf in ux_data.get("wireframes", []):
         db.add(Wireframe(
             id=str(uuid.uuid4()),
             project_id=project.id,
@@ -321,24 +322,24 @@ async def seed_database(db: AsyncSession):
         currency="USD",
         duration_months=est_data["duration_months"],
         roles_breakdown=est_data["roles_breakdown"],
-        infrastructure_cost=est_data["infrastructure_cost_monthly"],
-        ai_api_cost_monthly=est_data["ai_api_cost_monthly"],
+        infrastructure_cost=est_data.get("infrastructure_cost_monthly", 0.0),
+        ai_api_cost_monthly=est_data.get("ai_api_cost_monthly", 0.0),
         assumptions=est_data["assumptions"]
     ))
 
     risk_data = smart_engine.build_contextual_risks(ctx_data)
-    for rk in risk_data["risks"]:
+    for rk in risk_data.get("risks", []):
         db.add(Risk(
             id=str(uuid.uuid4()),
             project_id=project.id,
-            category=rk["category"],
-            title=rk["title"],
-            description=rk["description"],
-            probability=rk["probability"],
-            impact=rk["impact"],
-            severity=rk["severity"],
-            mitigation_strategy=rk["mitigation_strategy"],
-            owner=rk["owner"]
+            category=rk.get("category", "General"),
+            title=rk.get("title") or rk.get("risk_title", "Identified Risk"),
+            description=rk.get("description") or rk.get("mitigation", "Risk description"),
+            probability=rk.get("probability") or rk.get("likelihood", "MEDIUM"),
+            impact=rk.get("impact", "HIGH"),
+            severity=rk.get("severity") or rk.get("impact", "HIGH"),
+            mitigation_strategy=rk.get("mitigation_strategy") or rk.get("mitigation", "Standard mitigation strategy."),
+            owner=rk.get("owner", "Lead Architect / PM")
         ))
 
     score_data = smart_engine.build_contextual_score(ctx_data)
@@ -400,7 +401,8 @@ async def seed_database(db: AsyncSession):
         user_id=demo_user.id,
         user_name="Alex Mercer",
         action="SEEDED_INITIAL_TRANSFORMATION",
-        details="Initialized Customer Support Transformation with complete 24-dimension blueprint."
+        details="Initialized Customer Support Transformation with complete 24-dimension blueprint.",
+        created_at=datetime.utcnow()
     ))
     db.add(Notification(
         id=str(uuid.uuid4()),

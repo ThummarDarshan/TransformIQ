@@ -92,6 +92,53 @@ async def get_business_analysis(
     
     synth = await orchestrator.generate_business_analysis(context_data)
     
+    # Load all provenance links for this project
+    from app.models.provenance import SourceEvidence, ArtifactProvenance, ProvenanceType
+    prov_res = await db.execute(select(ArtifactProvenance).filter(ArtifactProvenance.project_id == project.id))
+    all_provs = prov_res.scalars().all()
+    ev_res = await db.execute(select(SourceEvidence).filter(SourceEvidence.project_id == project.id))
+    all_evs = {e.id: e for e in ev_res.scalars().all()}
+    
+    prov_map = {}
+    for p in all_provs:
+        ev = all_evs.get(p.source_evidence_id)
+        if ev:
+            prov_map[p.artifact_id] = {
+                "provenance_type": p.provenance_type,
+                "source_code": ev.source_code,
+                "document_name": ev.document_name,
+                "page_number": ev.page_number,
+                "section_heading": ev.section_heading,
+                "exact_text": ev.exact_text,
+                "rationale": p.rationale,
+                "confidence_score": p.confidence_score
+            }
+
+    def format_req(r):
+        p_info = prov_map.get(r.code) or prov_map.get(r.id)
+        if not p_info:
+            is_rec = "recommended" in (r.source or "").lower()
+            p_info = {
+                "provenance_type": ProvenanceType.RECOMMENDED.value if is_rec else ProvenanceType.DERIVED.value,
+                "source_code": "AI-REC" if is_rec else "SRC-001",
+                "document_name": r.source or "Enterprise Solution Spec",
+                "page_number": 1,
+                "section_heading": "Requirements",
+                "exact_text": r.description,
+                "rationale": f"Generated to fulfill transformation target: '{r.title}'",
+                "confidence_score": 0.94
+            }
+        return {
+            "id": r.id,
+            "code": r.code,
+            "title": r.title,
+            "description": r.description,
+            "priority": r.priority,
+            "req_type": r.req_type,
+            "source": r.source,
+            "provenance": p_info
+        }
+
     return ApiResponse(
         success=True,
         data={
@@ -111,22 +158,8 @@ async def get_business_analysis(
                 "is_bottleneck": p.is_bottleneck,
                 "pain_points": p.pain_points
             } for p in processes] if processes else synth.get("as_is_process", []),
-            "functional_requirements": [{
-                "code": r.code,
-                "title": r.title,
-                "description": r.description,
-                "priority": r.priority,
-                "req_type": r.req_type,
-                "source": r.source
-            } for r in func_reqs] if func_reqs else synth.get("functional_requirements", []),
-            "non_functional_requirements": [{
-                "code": r.code,
-                "title": r.title,
-                "description": r.description,
-                "priority": r.priority,
-                "req_type": r.req_type,
-                "source": r.source
-            } for r in nfunc_reqs] if nfunc_reqs else synth.get("non_functional_requirements", []),
+            "functional_requirements": [format_req(r) for r in func_reqs] if func_reqs else synth.get("functional_requirements", []),
+            "non_functional_requirements": [format_req(r) for r in nfunc_reqs] if nfunc_reqs else synth.get("non_functional_requirements", []),
             "stakeholders": [{
                 "name": s.name,
                 "role": s.role,

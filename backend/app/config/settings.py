@@ -67,9 +67,17 @@ class Settings(BaseSettings):
     AZURE_OPENAI_DEPLOYMENT: str = "gpt-4o"
     AZURE_OPENAI_API_VERSION: str = "2024-02-15-preview"
     
+    # Security & CORS
+    FRONTEND_URL: Optional[str] = None
+    ALLOWED_ORIGINS: str = "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173,http://localhost:8000,https://transformiq.vercel.app"
+    CORS_ALLOW_CREDENTIALS: bool = True
+    ENABLE_SECURITY_HEADERS: bool = True
+    STRICT_TRANSPORT_SECURITY: bool = True
+    
     # Storage & Uploads
     UPLOAD_DIR: str = "./uploads"
     MAX_UPLOAD_SIZE_MB: int = 25
+    MAX_URL_RESPONSE_SIZE_BYTES: int = 2 * 1024 * 1024  # 2 MB limit for SSRF protection
     
     # RAG Configuration
     CHAT_RAG_ENABLED: bool = True
@@ -88,10 +96,15 @@ class Settings(BaseSettings):
     SUPPORTED_LANGUAGES: str = "en,hi,gu"
     
     # Rate Limiting
+    RATE_LIMIT_ENABLED: bool = True
     CHAT_RATE_LIMIT_ENABLED: bool = True
+    AUTH_RATE_LIMIT_PER_MINUTE: int = 15
     CHAT_RATE_LIMIT_PER_MINUTE: int = 20
     AI_RATE_LIMIT_PER_MINUTE: int = 20
-    UPLOAD_RATE_LIMIT_PER_MINUTE: int = 5
-    WEBSITE_INGEST_RATE_LIMIT_PER_MINUTE: int = 3
+    UPLOAD_RATE_LIMIT_PER_MINUTE: int = 10
+    WEBSITE_INGEST_RATE_LIMIT_PER_MINUTE: int = 5
+    EXPORT_RATE_LIMIT_PER_MINUTE: int = 10
+    ADMIN_RATE_LIMIT_PER_MINUTE: int = 60
 
 settings = Settings()
+
