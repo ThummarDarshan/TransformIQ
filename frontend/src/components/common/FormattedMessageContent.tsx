@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Copy, Check, Terminal } from 'lucide-react';
+import { Copy, Check, Terminal, Play, Code2, ExternalLink, RefreshCw, Sparkles, Monitor } from 'lucide-react';
 
 interface FormattedMessageContentProps {
   content: string;
@@ -17,7 +17,7 @@ export const FormattedMessageContent: React.FC<FormattedMessageContentProps> = (
         return (
           <code
             key={cIdx}
-            className="px-1.5 py-0.5 mx-0.5 rounded bg-slate-950/80 border border-slate-700/80 text-emerald-300 font-mono text-[11px] sm:text-xs"
+            className="px-1.5 py-0.5 mx-0.5 rounded bg-slate-950/80 border border-slate-700/80 text-emerald-300 font-mono text-[11px] sm:text-xs font-semibold"
           >
             {codePart.slice(1, -1)}
           </code>
@@ -30,7 +30,7 @@ export const FormattedMessageContent: React.FC<FormattedMessageContentProps> = (
         if (boldPart.startsWith('**') && boldPart.endsWith('**') && boldPart.length > 3) {
           const inner = boldPart.slice(2, -2);
           return (
-            <strong key={bIdx} className="font-semibold text-white">
+            <strong key={bIdx} className="font-bold text-white">
               {inner}
             </strong>
           );
@@ -97,11 +97,17 @@ export const FormattedMessageContent: React.FC<FormattedMessageContentProps> = (
       continue;
     }
 
+    // Horizontal Rule
+    if (trimmed === '---' || trimmed === '***' || trimmed === '___') {
+      elements.push(<hr key={`hr-${i}`} className="my-3 border-slate-800" />);
+      continue;
+    }
+
     // Headers
     if (trimmed.startsWith('### ')) {
       elements.push(
-        <h4 key={`h3-${i}`} className="text-sm font-bold text-blue-300 mt-2.5 mb-1 flex items-center gap-1.5">
-          <span className="w-1.5 h-1.5 rounded-full bg-blue-400"></span>
+        <h4 key={`h3-${i}`} className="text-sm font-bold text-cyan-300 mt-3 mb-1.5 flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>
           {renderInlineFormatted(trimmed.slice(4))}
         </h4>
       );
@@ -109,7 +115,7 @@ export const FormattedMessageContent: React.FC<FormattedMessageContentProps> = (
     }
     if (trimmed.startsWith('## ')) {
       elements.push(
-        <h3 key={`h2-${i}`} className="text-sm sm:text-base font-bold text-white mt-3 mb-1.5 pb-1 border-b border-slate-700/50">
+        <h3 key={`h2-${i}`} className="text-sm sm:text-base font-bold text-white mt-3.5 mb-2 pb-1 border-b border-slate-800">
           {renderInlineFormatted(trimmed.slice(3))}
         </h3>
       );
@@ -117,7 +123,7 @@ export const FormattedMessageContent: React.FC<FormattedMessageContentProps> = (
     }
     if (trimmed.startsWith('# ')) {
       elements.push(
-        <h2 key={`h1-${i}`} className="text-base font-extrabold text-white mt-3.5 mb-2 pb-1 border-b border-slate-700">
+        <h2 key={`h1-${i}`} className="text-base font-extrabold text-white mt-4 mb-2 pb-1 border-b border-slate-700">
           {renderInlineFormatted(trimmed.slice(2))}
         </h2>
       );
@@ -131,7 +137,7 @@ export const FormattedMessageContent: React.FC<FormattedMessageContentProps> = (
       const rest = numMatch[2];
       elements.push(
         <div key={`num-${i}`} className="flex items-start gap-2.5 my-1.5 text-xs sm:text-sm pl-1">
-          <span className="shrink-0 flex items-center justify-center w-5 h-5 rounded-full bg-blue-500/20 border border-blue-400/40 text-[10px] font-bold text-blue-300">
+          <span className="shrink-0 flex items-center justify-center w-5 h-5 rounded-full bg-blue-500/20 border border-blue-400/40 text-[10px] font-bold text-blue-300 mt-0.5">
             {num}
           </span>
           <div className="flex-1 leading-relaxed text-slate-200">
@@ -182,30 +188,124 @@ interface CodeBlockProps {
 const CodeBlockItem: React.FC<CodeBlockProps> = ({ code, lang }) => {
   const [copied, setCopied] = useState(false);
 
+  const isHtmlDoc = lang.toLowerCase() === 'html' || code.includes('<!DOCTYPE html>') || code.includes('<html') || (code.includes('<body') && code.includes('tailwindcss'));
+  const isShellCommand = lang.toLowerCase() === 'bash' || lang.toLowerCase() === 'sh' || lang.toLowerCase() === 'shell' || lang.toLowerCase() === 'powershell';
+
+  // Open preview by default for complete HTML applications
+  const [showPreview, setShowPreview] = useState(isHtmlDoc);
+  const [previewKey, setPreviewKey] = useState(0);
+
   const handleCopy = () => {
     navigator.clipboard.writeText(code);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const handleOpenInNewTab = () => {
+    const blob = new Blob([code], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank');
+  };
+
   return (
-    <div className="my-2.5 rounded-xl bg-slate-950 border border-slate-800 overflow-hidden shadow-lg">
-      <div className="flex items-center justify-between px-3 py-1.5 bg-slate-900/90 border-b border-slate-800 text-[11px] text-slate-400">
-        <span className="flex items-center gap-1.5 font-mono uppercase text-[10px] tracking-wider text-slate-300">
-          <Terminal className="w-3 h-3 text-blue-400" />
-          {lang || 'code'}
-        </span>
-        <button
-          onClick={handleCopy}
-          className="flex items-center gap-1 px-2 py-0.5 rounded hover:bg-slate-800 text-slate-300 transition text-[11px]"
-        >
-          {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-          {copied ? 'Copied' : 'Copy'}
-        </button>
+    <div className={`my-3.5 rounded-2xl overflow-hidden shadow-2xl border ${isHtmlDoc ? 'border-blue-500/50 bg-slate-950' : 'border-slate-800 bg-slate-950'
+      }`}>
+      {/* Header bar */}
+      <div className={`flex items-center justify-between px-3.5 py-2 border-b text-[11px] ${isHtmlDoc ? 'bg-slate-900 border-blue-500/30' : 'bg-slate-900/90 border-slate-800'
+        }`}>
+        <div className="flex items-center gap-2">
+          <span className="flex items-center gap-1.5 font-mono uppercase text-[10px] tracking-wider text-slate-300 font-bold">
+            {isHtmlDoc ? <Monitor className="w-3.5 h-3.5 text-cyan-400" /> : <Terminal className="w-3.5 h-3.5 text-blue-400" />}
+            {lang || 'code'}
+          </span>
+          {isHtmlDoc && (
+            <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[10px] font-bold flex items-center gap-1 shadow-sm">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+              Live Working Website
+            </span>
+          )}
+          {isShellCommand && (
+            <span className="px-2 py-0.5 rounded-full bg-blue-500/15 border border-blue-500/30 text-blue-300 text-[10px] font-medium">
+              Terminal Command
+            </span>
+          )}
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          {isHtmlDoc && (
+            <>
+              <button
+                type="button"
+                onClick={() => setShowPreview(!showPreview)}
+                className={`flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${showPreview
+                    ? 'bg-blue-600 text-white shadow-md shadow-blue-500/30'
+                    : 'bg-slate-800 hover:bg-slate-700 text-cyan-300'
+                  }`}
+              >
+                {showPreview ? <Code2 className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                <span>{showPreview ? 'View Source Code' : 'Live Interactive Preview'}</span>
+              </button>
+
+              {showPreview && (
+                <button
+                  type="button"
+                  onClick={() => setPreviewKey((prev) => prev + 1)}
+                  title="Reload live website"
+                  className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition cursor-pointer"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={handleOpenInNewTab}
+                title="Launch website in full browser tab"
+                className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition cursor-pointer"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+              </button>
+            </>
+          )}
+
+          <button
+            type="button"
+            onClick={handleCopy}
+            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800/90 hover:bg-slate-700 text-slate-200 transition text-[11px] font-semibold cursor-pointer"
+          >
+            {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+            <span>{copied ? 'Copied' : isShellCommand ? 'Copy Command' : 'Copy Code'}</span>
+          </button>
+        </div>
       </div>
-      <pre className="p-3 text-[11px] sm:text-xs font-mono text-emerald-300 overflow-x-auto whitespace-pre leading-relaxed">
-        {code}
-      </pre>
+
+      {/* Body: Live Sandbox or Syntax Pre */}
+      {isHtmlDoc && showPreview ? (
+        <div className="p-2.5 bg-slate-900/60">
+          <div className="rounded-xl overflow-hidden border border-slate-700 bg-slate-950 shadow-inner">
+            <div className="flex items-center justify-between px-3.5 py-1.5 bg-slate-900 border-b border-slate-800 text-[10px] text-slate-400">
+              <div className="flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-rose-500/90"></span>
+                <span className="w-2.5 h-2.5 rounded-full bg-amber-500/90"></span>
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500/90"></span>
+                <span className="font-mono text-slate-300 ml-2">http://localhost:3000/app-sandbox</span>
+              </div>
+              <span className="text-[10px] text-emerald-400 font-mono font-semibold">● Ready & Interactive</span>
+            </div>
+            <iframe
+              key={previewKey}
+              srcDoc={code}
+              title="Live Website Sandbox"
+              sandbox="allow-scripts allow-forms allow-modals allow-popups allow-same-origin"
+              className="w-full h-[520px] bg-slate-950 border-0"
+            />
+          </div>
+        </div>
+      ) : (
+        <pre className="p-4 text-[11px] sm:text-xs font-mono text-emerald-300 overflow-x-auto whitespace-pre leading-relaxed bg-slate-950">
+          {code}
+        </pre>
+      )}
     </div>
   );
 };

@@ -9,13 +9,14 @@ from app.config.database import get_db
 from app.config.settings import settings
 from app.auth.deps import get_current_user, require_project_permission, get_user_project_role, record_audit_log
 from app.auth.permissions import Permission, has_permission
+from app.auth.rate_limiter import rate_limit
 from app.models.user import User
 from app.models.project import Project, Document, DocumentChunk, BusinessContext
 from app.schemas.project import ApiResponse
 from pydantic import BaseModel
 from app.documents.extractor import extract_text_from_file, extract_text_from_url, chunk_text
 
-router = APIRouter(prefix="/documents", tags=["Documents"])
+router = APIRouter(prefix="/documents", tags=["Documents & Knowledge Ingestion"])
 
 class IngestUrlRequest(BaseModel):
     project_id: str
@@ -73,12 +74,56 @@ async def get_document(
         }
     )
 
+@router.delete("/{document_id}", response_model=ApiResponse)
+async def delete_document(
+    document_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    doc_res = await db.execute(select(Document).filter(Document.id == document_id))
+    doc = doc_res.scalars().first()
+    if not doc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+        
+    role = await get_user_project_role(doc.project_id, current_user, db)
+    if not role or not has_permission(role, Permission.DOCUMENT_DELETE):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied: You do not have permission to delete this document.")
+
+    # Clean local file if stored on disk
+    if os.path.exists(doc.storage_path) and not doc.storage_path.startswith("http"):
+        try:
+            os.remove(doc.storage_path)
+        except Exception:
+            pass
+
+    await record_audit_log(
+        db=db,
+        user=current_user,
+        action="DELETE_DOCUMENT",
+        resource_type="DOCUMENT",
+        resource_id=doc.id,
+        project_id=doc.project_id,
+        details=f"{current_user.full_name} deleted {doc.filename}",
+        request=request
+    )
+
+    await db.delete(doc)
+    await db.commit()
+
+    return ApiResponse(
+        success=True,
+        data={"deleted": True, "id": document_id},
+        message="Document and knowledge chunks removed successfully"
+    )
+
 @router.post("/ingest-url", response_model=ApiResponse)
 async def ingest_url_document(
     payload: IngestUrlRequest,
     request: Request,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _limiter: None = Depends(rate_limit("website_ingest", settings.WEBSITE_INGEST_RATE_LIMIT_PER_MINUTE))
 ):
     project_id = payload.project_id
     url = payload.url.strip()
@@ -89,7 +134,13 @@ async def ingest_url_document(
         )
         
     extracted_text, pages = extract_text_from_url(url)
-    chunks = chunk_text(extracted_text)
+    if extracted_text.startswith("URL Security Block:"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=extracted_text
+        )
+
+    chunks = chunk_text(extracted_text, settings.RAG_CHUNK_SIZE, settings.RAG_CHUNK_OVERLAP)
     
     doc_id = str(uuid.uuid4())
     summary = f"Scraped & indexed {len(extracted_text)} characters across {len(chunks)} contextual chunks from Web/BRD URL: {url}"
@@ -158,11 +209,18 @@ async def upload_document(
     request: Request = None,
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _limiter: None = Depends(rate_limit("upload", settings.UPLOAD_RATE_LIMIT_PER_MINUTE))
 ):
     pid = project_id or request.query_params.get("project_id")
     if not pid:
         raise HTTPException(status_code=400, detail="Missing project_id parameter")
+
+    # Verify project permissions
+    role = await get_user_project_role(pid, current_user, db)
+    if not role or not has_permission(role, Permission.DOCUMENT_UPLOAD):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied: You do not have permission to upload documents to this project.")
+
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
     file_ext = os.path.splitext(file.filename)[1].lower().replace('.', '')
     if file_ext not in ["pdf", "docx", "pptx", "txt", "doc", "ppt", "md"]:
@@ -170,24 +228,35 @@ async def upload_document(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Unsupported file format. Please upload PDF, Word, PowerPoint, or text files."
         )
-        
-    saved_filename = f"{pid}_{str(uuid.uuid4())[:8]}_{file.filename}"
+
+    # Sanitize filename
+    clean_filename = os.path.basename(file.filename).replace(" ", "_")
+    saved_filename = f"{pid}_{str(uuid.uuid4())[:8]}_{clean_filename}"
     saved_path = os.path.join(settings.UPLOAD_DIR, saved_filename)
     
     with open(saved_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
         
     file_size = os.path.getsize(saved_path)
-    extracted_text, pages = extract_text_from_file(saved_path, file.filename)
-    chunks = chunk_text(extracted_text)
+    max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+    if file_size > max_bytes:
+        if os.path.exists(saved_path):
+            os.remove(saved_path)
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File size exceeds maximum allowed threshold of {settings.MAX_UPLOAD_SIZE_MB}MB."
+        )
+
+    extracted_text, pages = extract_text_from_file(saved_path, clean_filename)
+    chunks = chunk_text(extracted_text, settings.RAG_CHUNK_SIZE, settings.RAG_CHUNK_OVERLAP)
     
     doc_id = str(uuid.uuid4())
-    summary = f"Extracted {len(extracted_text)} characters across {len(chunks)} contextual chunks from {file.filename}."
+    summary = f"Extracted {len(extracted_text)} characters across {len(chunks)} contextual chunks from {clean_filename}."
     
     document = Document(
         id=doc_id,
         project_id=pid,
-        filename=file.filename,
+        filename=clean_filename,
         file_type=file_ext,
         file_size=file_size,
         storage_path=saved_path,
@@ -198,22 +267,26 @@ async def upload_document(
     db.add(document)
     
     for idx, c in enumerate(chunks):
+        page_num = 1
+        if pages and idx < len(pages):
+            page_num = pages[idx].get("page_number", 1)
+
         chunk_obj = DocumentChunk(
             id=str(uuid.uuid4()),
             document_id=doc_id,
             chunk_index=idx,
             content=c,
-            page_number=1,
-            metadata_json={"source": file.filename, "chunk_index": idx}
+            page_number=page_num,
+            metadata_json={"source": clean_filename, "chunk_index": idx, "page_number": page_num}
         )
         db.add(chunk_obj)
         
     # Update project business context
-    ctx_res = await db.execute(select(BusinessContext).filter(BusinessContext.project_id == project_id))
+    ctx_res = await db.execute(select(BusinessContext).filter(BusinessContext.project_id == pid))
     ctx = ctx_res.scalars().first()
     if ctx:
         current_summary = ctx.summary or ""
-        ctx.summary = f"{current_summary}\n\nDocument Grounding ({file.filename}):\n{extracted_text[:400]}..."
+        ctx.summary = f"{current_summary}\n\nDocument Grounding ({clean_filename}):\n{extracted_text[:400]}..."
         
     await record_audit_log(
         db=db,
@@ -221,8 +294,8 @@ async def upload_document(
         action="UPLOAD_DOCUMENT",
         resource_type="DOCUMENT",
         resource_id=doc_id,
-        project_id=project_id,
-        details=f"{current_user.full_name} uploaded {file.filename} ({file_size} bytes)",
+        project_id=pid,
+        details=f"{current_user.full_name} uploaded {clean_filename} ({file_size} bytes)",
         request=request
     )
     
@@ -232,7 +305,7 @@ async def upload_document(
         success=True,
         data={
             "id": doc_id,
-            "filename": file.filename,
+            "filename": clean_filename,
             "file_type": file_ext,
             "file_size": file_size,
             "chunks_count": len(chunks),

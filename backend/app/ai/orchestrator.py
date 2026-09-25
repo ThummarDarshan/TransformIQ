@@ -1,215 +1,475 @@
 import logging
 import re
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Tuple
 from app.config.settings import settings
-from app.ai.provider import GeminiProvider, OpenAIProvider, AzureOpenAIProvider
+from app.ai.provider import ai_router
 from app.ai import smart_engine
 
 logger = logging.getLogger(__name__)
 
 class AIOrchestrator:
-    def __init__(self):
-        self.provider_name = settings.AI_PROVIDER
-        
-    def _get_provider(self):
-        # 1. Check explicit provider preference
-        if settings.AI_PROVIDER == "gemini" and settings.GEMINI_API_KEY:
-            return GeminiProvider()
-        elif settings.AI_PROVIDER == "openai" and settings.OPENAI_API_KEY:
-            return OpenAIProvider()
-        elif settings.AI_PROVIDER == "azure_openai" and settings.AZURE_OPENAI_API_KEY:
-            return AzureOpenAIProvider()
+    """
+    Enterprise AI Transformation Orchestrator:
+    - Routes through resilient multi-provider router (Gemini -> Groq -> OpenRouter -> OpenAI -> Azure)
+    - Full multi-turn conversation memory
+    - Injected RAG context from documents & ingested website sources
+    - Connected Fullstack Website & Application Generator (Frontend + FastAPI Backend + Terminal Commands)
+    - Multilingual translation & contextual fluency (EN, HI, GU)
+    - Structured business transformation analysis
+    - Failover fallback engine
+    """
 
-        # 2. Auto-detection mode (prioritize Gemini for free-tier excellence)
-        if settings.GEMINI_API_KEY:
-            return GeminiProvider()
-        elif settings.OPENAI_API_KEY:
-            return OpenAIProvider()
-        elif settings.AZURE_OPENAI_API_KEY:
-            return AzureOpenAIProvider()
-        return None
-
-    async def run_discovery_chat(self, history: list, context_data: Dict[str, Any], language: str = "en") -> Dict[str, Any]:
-        last_msg = history[-1]["content"] if history else "Tell me about this project."
-        
-        # Check if real LLM is configured
-        provider = self._get_provider()
-        if provider:
-            try:
-                system_prompt = f"You are the TransformIQ AI Discovery Assistant. Language: {language}. Ask structured discovery questions about processes, stakeholders, systems, bottlenecks, budget, and compliance."
-                reply = await provider.generate_chat(
-                    [{"role": "system", "content": system_prompt}] + history,
-                    context_data
-                )
-                return {
-                    "message": reply,
-                    "suggested_actions": [
-                        "Review current AS-IS process bottlenecks",
-                        "Extract functional requirements",
-                        "Generate 8-dimension gap analysis",
-                        "Calculate TransformIQ readiness score"
-                    ]
-                }
-            except Exception as e:
-                logger.warning(f"AI Provider call failed, falling back to smart engine: {e}")
-
-        # Contextual dynamic discovery response
-        proj_name = context_data.get("name", "this initiative")
-        industry = context_data.get("industry", "enterprise")
-        
-        # Multilingual conversational greetings
+    def _build_transformation_system_prompt(self, project_context: str, rag_context: str, language: str) -> str:
+        lang_instruction = ""
         if language == "hi":
-            reply = f"नमस्ते! मैं TransformIQ AI डिस्कवरी सहायक हूँ। '{proj_name}' के संदर्भ में आपके {industry} वर्कफ़्लो और मुख्य चुनौतियों का विश्लेषण करने के लिए मैं तैयार हूँ। क्या आप अपने वर्तमान सिस्टम और मुख्य बाधाओं के बारे में विस्तार से बता सकते हैं?"
-            suggestions = [
-                "वर्तमान प्रक्रियाओं का विश्लेषण करें",
-                "गैप एनालिसिस (Gap Analysis) तैयार करें",
-                "AI और ऑटोमेशन सिफारिशें देखें",
-                "ट्रांसफॉर्मेशन स्कोर की गणना करें"
-            ]
+            lang_instruction = (
+                "You must respond fluently and professionally in Hindi (हिन्दी). "
+                "Keep technical terms like API, Microservices, Database, FastAPI, React, BPMN, PostgreSQL, ROI, Terminal Commands in Latin or standard transliterated format."
+            )
         elif language == "gu":
-            reply = f"નમસ્તે! હું TransformIQ AI ડિસ્કવરી સહાયક છું. '{proj_name}' પ્રોજેક્ટ માટે તમારા {industry} વર્કફ્લો અને મુખ્ય પડકારોનું વિશ્લેષણ કરવા માટે હું તૈયાર છું. શું તમે તમારી વર્તમાન સિસ્ટમ્સ અને મુખ્ય મુશ્કેલીઓ વિશે વિગતો આપી શકો છો?"
-            suggestions = [
-                "વર્તમાન પ્રક્રિયાઓનું વિશ્લેષણ કરો",
-                "ગેપ એનાલિસિસ (Gap Analysis) જનરેટ કરો",
-                "AI અને ઓટોમેશન ભલામણો જુઓ",
-                "ટ્રાન્સફોર્મેશન સ્કોર ગણો"
-            ]
+            lang_instruction = (
+                "You must respond fluently and professionally in Gujarati (ગુજરાતી). "
+                "Keep technical terms like API, Microservices, Database, FastAPI, React, BPMN, PostgreSQL, ROI, Terminal Commands in Latin or standard transliterated format."
+            )
         else:
-            reply = f"Hello! I am your TransformIQ AI Transformation Companion. Based on the business objectives for **{proj_name}** ({industry}), I've analyzed your challenge context and extracted critical operational variables.\n\nKey Discovery Findings:\n• **High Triage Friction**: Significant manual reading and categorization overhead.\n• **Integration Boundaries**: Disconnected legacy data stores requiring API-first bridges.\n• **Automation Candidates**: Straight-through NLP intent routing and SOP-grounded RAG assistance.\n\nWould you like me to generate the full **AS-IS Business Analysis**, run the **8-Dimension Gap Matrix**, or produce the **React Flow Architecture Blueprint**?"
-            suggestions = [
-                "Generate Complete Business Analysis & Requirements",
-                "Execute 8-Dimension Gap Analysis",
-                "Build Solution Architecture & BPMN Process",
-                "Calculate TransformIQ Readiness Score"
-            ]
+            lang_instruction = "Respond professionally in English with crisp structure and technical depth."
 
-        return {
-            "message": reply,
-            "suggested_actions": suggestions,
-            "extracted_insights": {
-                "industry": industry,
-                "complexity_level": "Enterprise High",
-                "recommended_architecture": "Event-Driven Microservices + FastAPI + RAG"
-            }
-        }
-
-    async def chat_companion(self, message: str, project_context: str = "", language: str = "en") -> str:
-        provider = self._get_provider()
-        if provider:
-            try:
-                system_prompt = (
-                    f"You are the TransformIQ Enterprise AI Transformation Companion. "
-                    f"You are an expert Chief Digital Transformation Officer and Enterprise Solutions Architect. "
-                    f"Language: {language}. "
-                    f"Always answer directly, professionally, and dynamically based on the project context provided.\n\n"
-                    f"Project Context:\n{project_context}\n\n"
-                    f"Guidelines:\n"
-                    f"- Provide actionable, technically grounded advice (mention specific tech stacks, microservices, databases, API designs, or ROI figures when relevant).\n"
-                    f"- Structure your answer with clear markdown bullet points and sections.\n"
-                    f"- Suggest logical next steps in the TransformIQ transformation workflow."
-                )
-                reply = await provider.generate_chat(
-                    [{"role": "system", "content": system_prompt}, {"role": "user", "content": message}],
-                    {"context": project_context}
-                )
-                if reply and reply.strip():
-                    return reply.strip()
-            except Exception as e:
-                logger.warning(f"AI Provider ({type(provider).__name__}) call failed: {e}")
-
-        # Smart contextual response based on user query and project context
-        msg_lower = message.lower()
-        proj_title = project_context.splitlines()[0] if project_context else "Enterprise Transformation Initiative"
-        
-        # 1. Greetings & Introductory queries
-        if re.search(r'\b(hi|hello|hey|namaste|kem cho|greetings)\b', msg_lower) or any(phrase in msg_lower for phrase in ["who are you", "what can you do", "introduce yourself"]):
-            return (
-                f"**Welcome to TransformIQ AI Transformation Companion!**\n\n"
-                f"I am your dedicated enterprise solution architect for **{proj_title}**.\n\n"
-                f"**Here is how I can assist your transformation journey:**\n"
-                f"• **Discovery & Scoping**: Synthesize problem statements, legacy tech constraints, and operational goals.\n"
-                f"• **Requirements Engineering**: Generate Functional & Non-Functional requirements with stakeholder matrices.\n"
-                f"• **Architecture & BPMN**: Design decoupled cloud microservices, PostgreSQL schemas, and interactive BPMN workflows.\n"
-                f"• **Estimation & Roadmap**: Calculate agile sprint velocity, INR/USD budgets, and What-If ROI projections.\n\n"
-                f"Try asking: *\"What is the recommended tech stack?\"*, *\"What are our top process gaps?\"*, or *\"How much will this cost?\"*"
-            )
-
-        # 2. Architecture & Technical Stacks
-        if any(w in msg_lower for w in ["architecture", "tech stack", "technology", "hld", "lld", "cloud", "aws", "azure", "fastapi", "microservice", "backend", "frontend", "infrastructure"]):
-            return (
-                f"**Enterprise Architecture Blueprint for {proj_title}**:\n\n"
-                f"• **API & Ingestion Gateway**: High-throughput FastAPI (Python 3.10+) asynchronous services behind Traefik/Nginx reverse proxy with OAuth2 JWT & RBAC security.\n"
-                f"• **AI & Semantic Intelligence Layer**: Hybrid RAG pipeline combining vector embeddings (pgvector / Chroma) with Gemini 2.0 Flash for sub-second NLP triage.\n"
-                f"• **Persistence & Event Streaming**: PostgreSQL 16 for ACID 3NF transactional data, Redis 7 for sub-millisecond session caching and message queues.\n"
-                f"• **Enterprise UX Studio**: React 18 + Vite + Tailwind CSS with interactive ReactFlow canvas and responsive mobile-first wireframes.\n"
-                f"• **High Availability & SLA**: Multi-zone containerized deployment with automatic horizontal scaling targeting 99.95% availability.\n\n"
-                f"👉 *Next Action: Open the **Architecture** stage to inspect, customize, and persist the interactive system component graph.*"
-            )
-
-        # 3. Gaps, Bottlenecks & Problems
-        if any(w in msg_lower for w in ["gap", "bottleneck", "challenge", "problem", "friction", "pain point", "delay", "issue"]):
-            return (
-                f"**Strategic Operational Gaps & Bottleneck Analysis**:\n\n"
-                f"1. **Manual Triage Latency**: Operational queue backlogs stretch ticket routing to 48+ hours, creating severe SLA violations.\n"
-                f"2. **Data Fragmentation**: Disconnected siloed systems force duplicate data entry across spreadsheets and legacy CRMs.\n"
-                f"3. **Absence of Autonomous STP**: 100% of standard transactions require manual employee touchpoints, driving high overhead.\n"
-                f"4. **Compliance & Visibility Deficit**: Lack of centralized telemetry prevents real-time tracking of process bottlenecks.\n\n"
-                f"**Remediation Blueprint**: Deploy AI intent parsing with >85% confidence routing, straight-through order updates, and exception queues.\n\n"
-                f"👉 *Next Action: View the **8-Dimension Gap Matrix** in the Gap Analysis stage.*"
-            )
-
-        # 4. Cost, Estimates & Roadmap
-        if any(w in msg_lower for w in ["cost", "budget", "price", "estimate", "hour", "timeline", "week", "month", "roi", "savings", "staffing"]):
-            return (
-                f"**Transformation Roadmap, Budget & ROI Forecast**:\n\n"
-                f"• **Delivery Cadence**: 16 Weeks structured into 4 Agile Sprints (Foundation, Core Logic, Review Hub, Hardening).\n"
-                f"• **Engineering Capacity**: 6 Cross-functional Engineers (Architect, AI Engineer, Backend, Frontend, DevOps, QA).\n"
-                f"• **Total Effort**: ~1,120 engineering hours with estimated investment of ~$138,500.\n"
-                f"• **Financial Impact**: Projected 87% operational efficiency gain, generating estimated annual operational savings of $360,000+ with breakeven in 6.4 months.\n\n"
-                f"👉 *Next Action: Adjust live parameters in the **What-If Simulation** tab to model custom ROI scenarios.*"
-            )
-
-        # 5. Database, Schema & Models
-        if any(w in msg_lower for w in ["database", "db", "schema", "table", "sql", "ddl", "postgres", "entity", "er diagram", "relation"]):
-            return (
-                f"**Relational Database Design & Data Architecture**:\n\n"
-                f"• **Database Engine**: PostgreSQL 16 (Relational 3NF with JSONB flexibility and pgvector extension).\n"
-                f"• **Core Entities**: Accounts, Tickets/Workflows, AI Analysis Chunks, Audit Trails, and System Telemetry.\n"
-                f"• **Performance Indexing**: B-tree indices on foreign keys, GIN indices on JSONB payloads, and HNSW vector indices.\n"
-                f"• **Data Integrity & Privacy**: AES-256 at rest, strict tenant-scoped schemas, and automated point-in-time recovery (PITR).\n\n"
-                f"👉 *Next Action: Inspect and copy the executable SQL DDL in the **Database Design** stage.*"
-            )
-
-        # 6. APIs, Endpoints & Integration
-        if any(w in msg_lower for w in ["api", "endpoint", "rest", "integration", "webhook", "openapi", "swagger"]):
-            return (
-                f"**API Architecture & Integration Strategy**:\n\n"
-                f"• **API Specification**: RESTful OpenAPI 3.0 standards with strict Pydantic v2 payload validation.\n"
-                f"• **Security Guardrails**: Bearer JWT authentication, OAuth2 scopes, and rate limiting (1,200 requests/minute).\n"
-                f"• **Event Hooks**: Webhook subscriptions for asynchronous status events, external CRM callbacks, and Slack/Teams alerts.\n\n"
-                f"👉 *Next Action: Explore mock responses and request schemas in the **APIs** stage.*"
-            )
-
-        # 7. HR / Talent / Recruitment domain
-        if any(w in msg_lower for w in ["hr", "candidate", "resume", "recruit", "applicant", "attendance", "onboard"]):
-            return (
-                f"**HR & Recruitment Modernization Plan**:\n\n"
-                f"• **AI Resume Ingestion**: Automated sub-2s resume parsing extracting skills, experience, and contact details from PDF/DOCX.\n"
-                f"• **Centralized Candidate CRM**: Eliminates 5 duplicate Excel sheets with unified candidate and client pipeline tracking.\n"
-                f"• **Recruiter Attendance & Metrics**: Real-time daily check-in telemetry and placement analytics.\n"
-                f"• **Client Portal**: Self-service job requisition posting, candidate shortlisting, and 1-click digital contracts.\n\n"
-                f"👉 *Next Action: Generate the full ATS roadmap in the **Business Analysis** stage.*"
-            )
-
-        # 8. General domain response
-        return (
-            f"**TransformIQ Advisory for {proj_title}**:\n\n"
-            f"Regarding your query: *\"{message}\"*\n\n"
-            f"• **Strategic Recommendation**: Modernize manual operational dependencies into event-driven straight-through workflows.\n"
-            f"• **AI Integration**: Ground LLM intent extraction with enterprise SOP vector knowledge to ensure >90% precision.\n"
-            f"• **Measurable Target**: Compress cycle times by 65-80% while preserving full SOC2 audit logging.\n\n"
-            f"👉 *You can navigate to **Business Analysis**, **Solution Architecture**, or **Planning** to view and download full implementation artifacts.*"
+        system_prompt = (
+            "You are the Chief Digital Transformation Officer and Enterprise Solutions Architect for TransformIQ.\n"
+            "Your role is to guide organizations through digital transformation, process automation, AI integration, enterprise architecture, and building production-ready connected web applications.\n\n"
+            f"Language Directive: {lang_instruction}\n\n"
+            f"--- PROJECT SCOPE & CONTEXT ---\n{project_context}\n\n"
         )
+
+        if rag_context and rag_context.strip():
+            system_prompt += (
+                f"--- GROUNDING KNOWLEDGE (FROM UPLOADED DOCUMENTS & WEB SOURCES) ---\n"
+                f"{rag_context}\n\n"
+                f"GROUNDING INSTRUCTION:\n"
+                f"When answering questions about the company, process, or uploaded materials, prioritize the grounding knowledge above.\n"
+                f"If citing specific facts from documents/URLs, indicate the source reference clearly.\n"
+                f"If certain information is not present in the documents, state it clearly rather than making up facts.\n\n"
+            )
+
+        system_prompt += (
+            "CRITICAL MANDATORY STRUCTURE FOR ALL WEBSITE & FULL-STACK APPLICATION PROMPTS:\n"
+            "Whenever the user asks to build, create, or generate a website, web app, dashboard, portal, or fullstack application:\n"
+            "You MUST ALWAYS provide the response in this exact 3-part sequence:\n\n"
+            "### Section 1: ⚡ Connected Backend Code (Python FastAPI)\n"
+            "- First, provide the complete, standalone Python FastAPI service code in a ```python code fence.\n"
+            "- Must include CORS middleware (allow_origins=['*']), Pydantic request/response models, database/in-memory store, error handling, and REST endpoints.\n\n"
+            "### Section 2: 🖥️ Interactive Frontend Code (HTML & Tailwind)\n"
+            "- Second, provide the complete, standalone interactive HTML5+TailwindCSS+JavaScript application in a ```html code fence.\n"
+            "- Must feature responsive UI, metric counters, live submission forms, dynamic table updates, and fetch() calls connected to backend endpoints.\n\n"
+            "### Section 3: 📋 Step-by-Step Connection & Execution Guide\n"
+            "- Third, provide a clear, non-technical 4-step guide so any user can connect and run both services:\n"
+            "  1. Step 1 (Backend): Run `cd backend` then `python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload` in Terminal 1.\n"
+            "  2. Step 2 (Frontend): Run `cd frontend` then `npm run dev` in Terminal 2.\n"
+            "  3. Step 3 (Open): Click '▶️ Live Interactive Preview' or open `http://localhost:5173`.\n"
+            "  4. Step 4 (Test): Enter data into the form, submit, and watch data sync to the backend API live.\n\n"
+            "RESPONSE GUIDELINES FOR GENERAL BUSINESS & TRANSFORMATION QUERIES:\n"
+            "When analyzing business workflows, operational friction, or transformation plans, structure your response as follows:\n"
+            "1. **Understanding & Scope**: Summary of the operational scenario.\n"
+            "2. **Current AS-IS Bottlenecks**: Explicit pain points (manual entry, latency, data silos, errors).\n"
+            "3. **Root Causes**: Systemic or structural reasons for the friction.\n"
+            "4. **Target Digital TO-BE Process**: Streamlined event-driven workflow.\n"
+            "5. **AI Opportunities**: Specific NLP classification, extraction, prediction, or RAG models.\n"
+            "6. **Automation Opportunities**: Robotic/service automation (STP, queue routing, notifications).\n"
+            "7. **Recommended Technology Stack**: Specific technologies (e.g., FastAPI, React, PostgreSQL 16, Redis, pgvector) with clear reasons WHY.\n"
+            "8. **Implementation Roadmap**: Phased milestones (Foundation -> Core Logic -> Pilot -> Scaling).\n"
+            "9. **Expected Business Impact & ROI**: Quantitative metric improvements (e.g. latency reduction, cost savings, SLA compliance).\n\n"
+            "For simple or conversational inquiries, answer naturally and concisely.\n"
+            "Maintain conversation context across follow-up questions."
+        )
+
+        return system_prompt
+
+    async def chat_companion(
+        self,
+        messages: List[Dict[str, str]],
+        project_context: str = "",
+        rag_context: str = "",
+        language: str = "en"
+    ) -> Tuple[str, str]:
+        """
+        Execute chat query using multi-provider AI router with multi-turn history.
+        Returns: (assistant_response_text, provider_name_used)
+        """
+        system_prompt = self._build_transformation_system_prompt(project_context, rag_context, language)
+
+        formatted_messages = [{"role": "system", "content": system_prompt}]
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if role in ["user", "assistant", "system"]:
+                formatted_messages.append({"role": role, "content": content})
+
+        try:
+            reply, provider_used = await ai_router.execute_chat(
+                messages=formatted_messages,
+                context_data={"project_context": project_context, "rag_context": rag_context},
+                max_tokens=settings.AI_MAX_OUTPUT_TOKENS,
+                temperature=0.7
+            )
+
+            # Guarantee that non-tech friendly connection steps are always included in the same response
+            latest_msg_txt = (messages[-1]["content"].lower() if messages else "")
+            is_app_query = any(w in latest_msg_txt for w in ["website", "web app", "webapp", "portal", "dashboard", "frontend", "backend", "fullstack", "site", "build"])
+            has_code = "```html" in reply or "```python" in reply
+            has_steps = any(k in reply.lower() for k in ["step 1", "step-by-step guide", "beginner-friendly", "terminal 1"])
+
+            if (is_app_query or has_code) and not has_steps:
+                reply += (
+                    "\n\n---\n\n"
+                    "### 📋 Simple Step-by-Step Guide to Connect & Run (No Coding Required)\n\n"
+                    "Even if you are not a developer, follow these **4 easy steps** to run and connect your full-stack system:\n\n"
+                    "1. **Step 1 — Start the Backend Server (Port 8000)**:\n"
+                    "   - Open your first **Terminal** (or Command Prompt / PowerShell).\n"
+                    "   - Type `cd backend` and press Enter.\n"
+                    "   - Type `python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload` and press Enter.\n"
+                    "   - *Status Check:* You will see `Uvicorn running on http://0.0.0.0:8000` — your backend database API is active!\n\n"
+                    "2. **Step 2 — Start the Frontend Web App (Port 5173)**:\n"
+                    "   - Open a **Second Terminal** window.\n"
+                    "   - Type `cd frontend` and press Enter.\n"
+                    "   - Type `npm run dev` and press Enter.\n"
+                    "   - *Status Check:* Your application is live at `http://localhost:5173`.\n\n"
+                    "3. **Step 3 — Open the Live Website**:\n"
+                    "   - Click **`▶️ Live Interactive Preview`** right above in this chat window to use the website immediately without leaving.\n"
+                    "   - Or click the **Launch in full tab (`↗`)** button on top right of the code container to open it in a clean browser window.\n\n"
+                    "4. **Step 4 — Test the Connection & Add Data**:\n"
+                    "   - Type a title in the form, select category & priority, and click **Trigger Event & Post API**.\n"
+                    "   - *Verification:* The item will immediately be sent to your Python backend (`http://localhost:8000/api/v1/tickets`), saved, and displayed in real-time in the synchronized feed with updated counters!\n"
+                )
+
+            return reply, provider_used
+        except Exception as e:
+            logger.warning(f"[AI Orchestrator] Multi-provider router failed ({e}). Falling back to local smart engine.")
+
+        # Resilient smart engine fallback
+        latest_user_msg = messages[-1]["content"] if messages else "Digital Transformation"
+        fallback_reply = self._generate_smart_fallback(latest_user_msg, project_context, language)
+        return fallback_reply, "deterministic_smart_engine"
+
+    def _generate_smart_fallback(self, query: str, project_context: str, language: str) -> str:
+        q_lower = query.lower()
+        proj_title = project_context.splitlines()[0] if project_context else "Enterprise Initiative"
+
+        # Check if user is asking for a website / application / web app
+        if any(w in q_lower for w in ["website", "web app", "webapp", "build a site", "create website", "give me a website", "portal", "dashboard", "frontend and backend", "fullstack", "ui and api"]):
+            return (
+                f"## 🌐 Connected Full-Stack Application for {proj_title}\n\n"
+                f"Here is your complete enterprise application split into **Backend Service**, **Interactive Frontend**, and **Execution Steps**.\n\n"
+                f"---\n\n"
+                f"### 1. ⚡ Connected Backend Code (Python FastAPI)\n"
+                f"Save or run this backend service in `backend/app/main.py`:\n\n"
+                f"```python\n"
+                f"from fastapi import FastAPI, HTTPException, status\n"
+                f"from fastapi.middleware.cors import CORSMiddleware\n"
+                f"from pydantic import BaseModel, Field\n"
+                f"from typing import List, Optional\n"
+                f"from datetime import datetime\n\n"
+                f"app = FastAPI(title=\"{proj_title} API\", version=\"1.0.0\")\n\n"
+                f"# Enable CORS for seamless frontend browser communication\n"
+                f"app.add_middleware(\n"
+                f"    CORSMiddleware,\n"
+                f"    allow_origins=[\"*\"],\n"
+                f"    allow_credentials=True,\n"
+                f"    allow_methods=[\"*\"],\n"
+                f"    allow_headers=[\"*\"],\n"
+                f")\n\n"
+                f"# --- Data Schemas ---\n"
+                f"class TicketCreate(BaseModel):\n"
+                f"    title: str = Field(..., min_length=3, max_length=200)\n"
+                f"    category: str\n"
+                f"    priority: str = \"MEDIUM\"\n"
+                f"    details: Optional[str] = None\n\n"
+                f"class TicketResponse(BaseModel):\n"
+                f"    id: str\n"
+                f"    title: str\n"
+                f"    category: str\n"
+                f"    priority: str\n"
+                f"    status: str\n"
+                f"    created_at: datetime\n\n"
+                f"# In-memory persistent state\n"
+                f"DB_TICKETS = [\n"
+                f"    {{\"id\": \"ITM-101\", \"title\": \"Payment Gateway Webhook Timeout\", \"category\": \"Billing & Payment Gateway\", \"priority\": \"HIGH\", \"status\": \"AUTO_RESOLVED\", \"created_at\": datetime.utcnow()}},\n"
+                f"    {{\"id\": \"ITM-102\", \"title\": \"Carrier Tracking ID Synchronization\", \"category\": \"Order Fulfillment & Logistics\", \"priority\": \"MEDIUM\", \"status\": \"IN_PROGRESS\", \"created_at\": datetime.utcnow()}},\n"
+                f"    {{\"id\": \"ITM-103\", \"title\": \"Bulk Inventory Discrepancy Reconciliation\", \"category\": \"Inventory Sync & Warehousing\", \"priority\": \"HIGH\", \"status\": \"QUEUED\", \"created_at\": datetime.utcnow()}}\n"
+                f"]\n\n"
+                f"@app.get(\"/api/v1/tickets\", response_model=List[TicketResponse])\n"
+                f"async def list_tickets():\n"
+                f"    \"\"\"Retrieve all synchronized tickets.\"\"\"\n"
+                f"    return DB_TICKETS\n\n"
+                f"@app.post(\"/api/v1/tickets\", response_model=TicketResponse, status_code=status.HTTP_201_CREATED)\n"
+                f"async def create_ticket(payload: TicketCreate):\n"
+                f"    \"\"\"Create and automatically route a new ticket.\"\"\"\n"
+                f"    new_ticket = {{\n"
+                f"        \"id\": f\"ITM-{{len(DB_TICKETS) + 101}}\",\n"
+                f"        \"title\": payload.title,\n"
+                f"        \"category\": payload.category,\n"
+                f"        \"priority\": payload.priority,\n"
+                f"        \"status\": \"ESCALATED\" if payload.priority == \"HIGH\" else \"AUTO_ROUTED\",\n"
+                f"        \"created_at\": datetime.utcnow()\n"
+                f"    }}\n"
+                f"    DB_TICKETS.insert(0, new_ticket)\n"
+                f"    return new_ticket\n"
+                f"```\n\n"
+                f"---\n\n"
+                f"### 2. 🖥️ Interactive Frontend Code (HTML & Tailwind CSS)\n"
+                f"Click **`▶️ Live Interactive Preview`** on top right of the code container to interact directly with the application:\n\n"
+                f"```html\n"
+                f"<!DOCTYPE html>\n"
+                f"<html lang=\"en\">\n"
+                f"<head>\n"
+                f"  <meta charset=\"UTF-8\" />\n"
+                f"  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\n"
+                f"  <title>{proj_title} - Portal</title>\n"
+                f"  <script src=\"https://cdn.tailwindcss.com\"></script>\n"
+                f"  <link rel=\"stylesheet\" href=\"https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css\" />\n"
+                f"</head>\n"
+                f"<body class=\"bg-slate-950 text-slate-100 min-h-screen font-sans antialiased p-4 md:p-8 selection:bg-blue-600 selection:text-white\">\n"
+                f"  <div class=\"max-w-6xl mx-auto space-y-6\">\n"
+                f"    <!-- Top Navigation Header -->\n"
+                f"    <header class=\"flex flex-col md:flex-row md:items-center justify-between gap-4 p-5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-2xl backdrop-blur-xl\">\n"
+                f"      <div class=\"flex items-center gap-3\">\n"
+                f"        <div class=\"w-11 h-11 rounded-xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-cyan-500 flex items-center justify-center text-white text-lg shadow-lg shadow-blue-500/25\">\n"
+                f"          <i class=\"fa-solid fa-layer-group\"></i>\n"
+                f"        </div>\n"
+                f"        <div>\n"
+                f"          <h1 class=\"text-lg font-extrabold text-white tracking-tight\">{proj_title} Platform</h1>\n"
+                f"          <p class=\"text-xs text-slate-400\">Automated Business Operations & AI Triage Hub</p>\n"
+                f"        </div>\n"
+                f"      </div>\n"
+                f"      <div class=\"flex items-center gap-2\">\n"
+                f"        <span class=\"inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-semibold shadow-sm\">\n"
+                f"          <span class=\"w-2 h-2 rounded-full bg-emerald-400 animate-pulse\"></span> Backend Connected (Port 8000)\n"
+                f"        </span>\n"
+                f"        <button onclick=\"fetchTickets()\" class=\"px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition flex items-center gap-1.5\">\n"
+                f"          <i class=\"fa-solid fa-arrows-rotate\"></i> Refresh\n"
+                f"        </button>\n"
+                f"      </div>\n"
+                f"    </header>\n\n"
+                f"    <!-- Metric Stat Cards -->\n"
+                f"    <div class=\"grid grid-cols-1 sm:grid-cols-3 gap-4\">\n"
+                f"      <div class=\"p-5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-lg\">\n"
+                f"        <div class=\"flex items-center justify-between text-slate-400 text-xs font-semibold\">\n"
+                f"          <span>Total Active Records</span>\n"
+                f"          <i class=\"fa-solid fa-database text-blue-400\"></i>\n"
+                f"        </div>\n"
+                f"        <div id=\"statTotal\" class=\"text-3xl font-black text-white mt-2\">3</div>\n"
+                f"        <span class=\"text-[11px] text-emerald-400 mt-1 block\"><i class=\"fa-solid fa-arrow-trend-up mr-1\"></i> Real-time synchronized</span>\n"
+                f"      </div>\n"
+                f"      <div class=\"p-5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-lg\">\n"
+                f"        <div class=\"flex items-center justify-between text-slate-400 text-xs font-semibold\">\n"
+                f"          <span>AI Straight-Through Rate</span>\n"
+                f"          <i class=\"fa-solid fa-robot text-emerald-400\"></i>\n"
+                f"        </div>\n"
+                f"        <div class=\"text-3xl font-black text-emerald-400 mt-2\">94.2%</div>\n"
+                f"        <span class=\"text-[11px] text-slate-400 mt-1 block\">Zero human touch required</span>\n"
+                f"      </div>\n"
+                f"      <div class=\"p-5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-lg\">\n"
+                f"        <div class=\"flex items-center justify-between text-slate-400 text-xs font-semibold\">\n"
+                f"          <span>Avg Turnaround Time</span>\n"
+                f"          <i class=\"fa-solid fa-bolt text-cyan-400\"></i>\n"
+                f"        </div>\n"
+                f"        <div class=\"text-3xl font-black text-cyan-400 mt-2\">12.4m</div>\n"
+                f"        <span class=\"text-[11px] text-slate-400 mt-1 block\">Reduced from 48 hours</span>\n"
+                f"      </div>\n"
+                f"    </div>\n\n"
+                f"    <!-- Submission Form & Live Feed -->\n"
+                f"    <div class=\"grid grid-cols-1 lg:grid-cols-3 gap-6\">\n"
+                f"      <!-- New Submission Card -->\n"
+                f"      <div class=\"p-6 rounded-2xl bg-slate-900/90 border border-slate-800 h-fit space-y-4 shadow-xl\">\n"
+                f"        <h2 class=\"text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2\">\n"
+                f"          <i class=\"fa-solid fa-paper-plane text-blue-400\"></i> Dispatch New Item\n"
+                f"        </h2>\n"
+                f"        <form id=\"ticketForm\" onsubmit=\"handleSubmit(event)\" class=\"space-y-3.5\">\n"
+                f"          <div>\n"
+                f"            <label class=\"block text-xs text-slate-300 font-semibold mb-1\">Title / Subject</label>\n"
+                f"            <input id=\"titleInput\" required type=\"text\" placeholder=\"e.g. ERP Inventory Webhook Failure\" class=\"w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white focus:outline-none focus:ring-2 focus:ring-blue-500\" />\n"
+                f"          </div>\n"
+                f"          <div>\n"
+                f"            <label class=\"block text-xs text-slate-300 font-semibold mb-1\">Category Taxonomy</label>\n"
+                f"            <select id=\"categoryInput\" class=\"w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white focus:outline-none focus:ring-2 focus:ring-blue-500\">\n"
+                f"              <option value=\"Billing & Payment Gateway\">Billing & Payment Gateway</option>\n"
+                f"              <option value=\"Order Fulfillment & Logistics\">Order Fulfillment & Logistics</option>\n"
+                f"              <option value=\"Inventory Sync & Warehousing\">Inventory Sync & Warehousing</option>\n"
+                f"              <option value=\"Customer Support Escalation\">Customer Support Escalation</option>\n"
+                f"            </select>\n"
+                f"          </div>\n"
+                f"          <div>\n"
+                f"            <label class=\"block text-xs text-slate-300 font-semibold mb-1\">Priority SLA</label>\n"
+                f"            <select id=\"priorityInput\" class=\"w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white focus:outline-none focus:ring-2 focus:ring-blue-500\">\n"
+                f"              <option value=\"HIGH\">HIGH (Immediate AI Triage)</option>\n"
+                f"              <option value=\"MEDIUM\" selected>MEDIUM (Standard Automated Routing)</option>\n"
+                f"              <option value=\"LOW\">LOW (Batch Resolution)</option>\n"
+                f"            </select>\n"
+                f"          </div>\n"
+                f"          <button type=\"submit\" class=\"w-full py-3 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 text-white text-xs font-bold transition shadow-lg shadow-blue-500/25 flex items-center justify-center gap-2 cursor-pointer\">\n"
+                f"            <i class=\"fa-solid fa-bolt\"></i> Trigger Event & Post API\n"
+                f"          </button>\n"
+                f"        </form>\n"
+                f"      </div>\n\n"
+                f"      <!-- Live Feed / Data Table -->\n"
+                f"      <div class=\"lg:col-span-2 p-6 rounded-2xl bg-slate-900/90 border border-slate-800 space-y-4 shadow-xl\">\n"
+                f"        <div class=\"flex items-center justify-between border-b border-slate-800 pb-3\">\n"
+                f"          <h2 class=\"text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2\">\n"
+                f"            <i class=\"fa-solid fa-list-check text-cyan-400\"></i> Synchronized Pipeline Feed\n"
+                f"          </h2>\n"
+                f"          <span id=\"listCount\" class=\"text-xs text-slate-400 font-mono\">3 records</span>\n"
+                f"        </div>\n"
+                f"        <div id=\"ticketList\" class=\"space-y-3\">\n"
+                f"          <!-- Loaded dynamically -->\n"
+                f"        </div>\n"
+                f"      </div>\n"
+                f"    </div>\n"
+                f"  </div>\n\n"
+                f"  <script>\n"
+                f"    const API_URL = 'http://localhost:8000/api/v1/tickets';\n"
+                f"    let items = [\n"
+                f"      {{ id: 'ITM-101', title: 'Payment Gateway Webhook Timeout', category: 'Billing & Payment Gateway', priority: 'HIGH', status: 'AUTO_RESOLVED', date: 'Just now' }},\n"
+                f"      {{ id: 'ITM-102', title: 'Carrier Tracking ID Synchronization', category: 'Order Fulfillment & Logistics', priority: 'MEDIUM', status: 'IN_PROGRESS', date: '4m ago' }},\n"
+                f"      {{ id: 'ITM-103', title: 'Bulk Inventory Discrepancy Reconciliation', category: 'Inventory Sync & Warehousing', priority: 'HIGH', status: 'QUEUED', date: '11m ago' }}\n"
+                f"    ];\n\n"
+                f"    function render() {{\n"
+                f"      const container = document.getElementById('ticketList');\n"
+                f"      document.getElementById('statTotal').innerText = items.length;\n"
+                f"      document.getElementById('listCount').innerText = `${{items.length}} records`;\n"
+                f"      container.innerHTML = items.map(item => `\n"
+                f"        <div class=\"p-4 rounded-xl bg-slate-950/80 border border-slate-800/90 hover:border-slate-700 transition flex items-center justify-between gap-4 shadow-sm\">\n"
+                f"          <div class=\"min-w-0\">\n"
+                f"            <div class=\"flex items-center gap-2\">\n"
+                f"              <span class=\"text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-bold shrink-0\">${{item.id}}</span>\n"
+                f"              <span class=\"text-xs font-bold text-white truncate\">${{item.title}}</span>\n"
+                f"            </div>\n"
+                f"            <div class=\"flex items-center gap-3 text-[11px] text-slate-400 mt-1.5\">\n"
+                f"              <span><i class=\"fa-solid fa-folder text-blue-400 mr-1\"></i>${{item.category}}</span>\n"
+                f"              <span><i class=\"fa-solid fa-clock text-slate-500 mr-1\"></i>${{item.date}}</span>\n"
+                f"            </div>\n"
+                f"          </div>\n"
+                f"          <div class=\"shrink-0 flex items-center gap-2\">\n"
+                f"            <span class=\"px-2.5 py-1 rounded-full text-[10px] font-bold ${{item.status === 'AUTO_RESOLVED' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'}}\">${{item.status}}</span>\n"
+                f"          </div>\n"
+                f"        </div>\n"
+                f"      `).join('');\n"
+                f"    }}\n\n"
+                f"    async function handleSubmit(e) {{\n"
+                f"      e.preventDefault();\n"
+                f"      const title = document.getElementById('titleInput').value.trim();\n"
+                f"      const category = document.getElementById('categoryInput').value;\n"
+                f"      const priority = document.getElementById('priorityInput').value;\n"
+                f"      if (!title) return;\n\n"
+                f"      // Attempt live POST to backend API\n"
+                f"      try {{\n"
+                f"        const res = await fetch(API_URL, {{\n"
+                f"          method: 'POST',\n"
+                f"          headers: {{ 'Content-Type': 'application/json' }},\n"
+                f"          body: JSON.stringify({{ title, category, priority }})\n"
+                f"        }});\n"
+                f"        if (res.ok) {{\n"
+                f"          const saved = await res.json();\n"
+                f"          items.unshift({{\n"
+                f"            id: saved.id || 'ITM-' + (items.length + 101),\n"
+                f"            title: saved.title || title,\n"
+                f"            category: saved.category || category,\n"
+                f"            priority: saved.priority || priority,\n"
+                f"            status: saved.status || 'AUTO_ROUTED',\n"
+                f"            date: 'Just now'\n"
+                f"          }});\n"
+                f"          render();\n"
+                f"          document.getElementById('titleInput').value = '';\n"
+                f"          return;\n"
+                f"        }}\n"
+                f"      }} catch (err) {{\n"
+                f"        console.info('Backend API offline or CORS in sandbox, using reactive in-memory state:', err);\n"
+                f"      }}\n\n"
+                f"      // Fallback state update for sandbox\n"
+                f"      items.unshift({{\n"
+                f"        id: 'ITM-' + (items.length + 101),\n"
+                f"        title,\n"
+                f"        category,\n"
+                f"        priority,\n"
+                f"        status: priority === 'HIGH' ? 'ESCALATED' : 'AUTO_ROUTED',\n"
+                f"        date: 'Just now'\n"
+                f"      }});\n"
+                f"      render();\n"
+                f"      document.getElementById('titleInput').value = '';\n"
+                f"    }}\n\n"
+                f"    async function fetchTickets() {{\n"
+                f"      try {{\n"
+                f"        const res = await fetch(API_URL);\n"
+                f"        if (res.ok) {{\n"
+                f"          const data = await res.json();\n"
+                f"          if (Array.isArray(data) && data.length > 0) {{\n"
+                f"            items = data;\n"
+                f"          }}\n"
+                f"        }}\n"
+                f"      }} catch (err) {{}}\n"
+                f"      render();\n"
+                f"    }}\n\n"
+                f"    render();\n"
+                f"  </script>\n"
+                f"</body>\n"
+                f"</html>\n"
+                f"```\n\n"
+                f"---\n\n"
+                f"### 3. 📋 Step-by-Step Connection & Execution Guide (No Coding Required)\n\n"
+                f"Even if you are not a developer, follow these **4 easy steps** to run and connect your full-stack system:\n\n"
+                f"1. **Step 1 — Start the Backend Server (Port 8000)**:\n"
+                f"   - Open your first **Terminal** (or Command Prompt / PowerShell).\n"
+                f"   - Type `cd backend` and press Enter.\n"
+                f"   - Type `python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload` and press Enter.\n"
+                f"   - *Status Check:* You will see `Uvicorn running on http://0.0.0.0:8000` — your backend database API is active!\n\n"
+                f"2. **Step 2 — Start the Frontend Web App (Port 5173)**:\n"
+                f"   - Open a **Second Terminal** window.\n"
+                f"   - Type `cd frontend` and press Enter.\n"
+                f"   - Type `npm run dev` and press Enter.\n"
+                f"   - *Status Check:* Your application is live at `http://localhost:5173`.\n\n"
+                f"3. **Step 3 — Open the Live Website**:\n"
+                f"   - Click **`▶️ Live Interactive Preview`** right above in this chat window to use the website immediately without leaving.\n"
+                f"   - Or click the **Launch in full tab (`↗`)** button on top right of the code container to open it in a clean browser window.\n\n"
+                f"4. **Step 4 — Test the Connection & Add Data**:\n"
+                f"   - Type a title (e.g. *\"Payment gateway sync retry\"*) in the form.\n"
+                f"   - Select a category and priority level.\n"
+                f"   - Click **Trigger Event & Post API**.\n"
+                f"   - *Verification:* The item will immediately be sent to your Python backend (`http://localhost:8000/api/v1/tickets`), saved, and displayed in real-time in the synchronized feed with updated counters!\n"
+            )
+
+        if language == "hi":
+            return (
+                f"**TransformIQ AI रूपांतरण सहायक** ({proj_title})\n\n"
+                f"आपके प्रश्न *\"{query}\"* के आधार पर विश्लेषण:\n\n"
+                f"1. **वर्तमान प्रक्रिया विश्लेषण**: मैन्युअल डेटा एंट्री और देरी को स्वचालित करने की आवश्यकता है।\n"
+                f"2. **AI एवं स्वचालन (Automation)**: NLP आधारित वर्गीकरण और स्वचालित रूटिंग से टर्नअराउंड समय 80% तक कम हो सकता है।\n"
+                f"3. **प्रौद्योगिकी स्टैक**: FastAPI (बैकएंड), React 18 (यूआई), PostgreSQL (डेटाबेस)।\n\n"
+                f"👉 आप **Business Analysis** या **Architecture Blueprint** चरण में जाकर विस्तृत विनिर्देश देख सकते हैं।"
+            )
+        elif language == "gu":
+            return (
+                f"**TransformIQ AI ટ્રાન્સફોર્મેશન સહાયક** ({proj_title})\n\n"
+                f"તમારા પ્રશ્ન *\"{query}\"* પર આધારિત વિશ્લેષણ:\n\n"
+                f"1. **વર્તમાન પ્રક્રિયા વિશ્લેષણ**: મેન્યુઅલ પ્રક્રિયાઓ અને ડેટા ભૂલોને ડિજિટલ વર્કફ્લો દ્વારા સુધારવું જરૂરી છે.\n"
+                f"2. **AI અને ઓટોમેશન**: NLP આધારિત ઓર્ડર પ્રોસેસિંગ અને ઓટોમેશનથી કામગીરીમાં 75%+ ઝડપ આવશે.\n"
+                f"3. **ટેકનોલોજી સ્ટેક**: FastAPI, React 18, PostgreSQL 16.\n\n"
+                f"👉 કૃપા કરીને આગલા પગલાં માટે **Business Analysis** અથવા **Architecture** ટેબ તપાસો."
+            )
+        else:
+            return (
+                f"**TransformIQ AI Transformation Advisory for {proj_title}**\n\n"
+                f"Regarding your query: *\"{query}\"*\n\n"
+                f"### 1. AS-IS Process & Bottleneck Assessment\n"
+                f"• **Friction Points**: High dependency on manual touchpoints, spreadsheets, and delayed communication channels.\n"
+                f"• **Data Integrity**: Fragmented systems create data duplication and lack real-time synchronization.\n\n"
+                f"### 2. Recommended Digital Solution\n"
+                f"• **Event-Driven Architecture**: Transition to high-throughput async REST/Webhook endpoints with transactional consistency.\n"
+                f"• **AI Opportunities**: Fine-tuned classification engine for straight-through triage and vector-grounded RAG assistance.\n"
+                f"• **Automation Pipeline**: Automated validation, queue dispatch, and proactive SLA escalation monitors.\n\n"
+                f"### 3. Recommended Technology Stack\n"
+                f"• **Frontend**: React + TypeScript (Modular state management, interactive canvas)\n"
+                f"• **Backend**: Python FastAPI (Async high-performance execution, OAuth2 RBAC)\n"
+                f"• **Database**: PostgreSQL 16 + pgvector (ACID compliance + semantic vector embeddings)\n\n"
+                f"👉 *Navigate to **Business Analysis**, **Architecture**, or **Master Blueprint** to inspect and export full production artifacts.*"
+            )
 
     async def generate_business_analysis(self, context_data: Dict[str, Any]) -> Dict[str, Any]:
         return smart_engine.build_contextual_business_analysis(context_data)

@@ -1,20 +1,31 @@
 import uuid
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
-from fastapi import APIRouter, Depends, HTTPException, Body, Request
+from fastapi import APIRouter, Depends, HTTPException, Body, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from app.config.database import get_db
+from app.config.settings import settings
 from app.auth.deps import get_current_user, require_project_permission, record_audit_log
 from app.auth.permissions import Permission
+from app.auth.rate_limiter import rate_limit
 from app.models.user import User
-from app.models.project import Project, BusinessContext
+from app.models.project import Project, BusinessContext, Document, DocumentChunk
 from app.models.collaboration import Conversation, Message
 from app.models.transformation import Question
 from app.schemas.project import ApiResponse
 from app.ai.orchestrator import orchestrator
+from app.documents.extractor import search_relevant_chunks
 
 router = APIRouter(prefix="/discovery", tags=["Discovery & AI Companion"])
+
+class ChatRequest(BaseModel):
+    message: str
+    conversation_id: Optional[str] = None
+    language: Optional[str] = "en"
+
+class UpdateConversationRequest(BaseModel):
+    title: str
 
 @router.get("/project/{project_id}/questions", response_model=ApiResponse)
 async def get_discovery_questions(
@@ -67,11 +78,6 @@ async def get_discovery_questions(
         } for q in questions]
     )
 
-class ChatRequest(BaseModel):
-    message: str
-    conversation_id: Optional[str] = None
-    language: Optional[str] = "en"
-
 @router.get("/project/{project_id}/conversations", response_model=ApiResponse)
 async def get_project_conversations(
     project_id: str,
@@ -79,7 +85,7 @@ async def get_project_conversations(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """List all saved chat conversation threads for this project (like ChatGPT sidebar)."""
+    """List all saved chat conversation threads for this project."""
     conv_res = await db.execute(
         select(Conversation)
         .filter(Conversation.project_id == project.id, Conversation.module == "DISCOVERY")
@@ -89,7 +95,6 @@ async def get_project_conversations(
     
     results = []
     for c in conversations:
-        # Get messages count and last message preview
         msg_res = await db.execute(
             select(Message)
             .filter(Message.conversation_id == c.id)
@@ -120,7 +125,7 @@ async def get_single_conversation(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Retrieve messages for a specific conversation session."""
+    """Retrieve all messages for a specific conversation session."""
     conv_res = await db.execute(
         select(Conversation).filter(Conversation.id == conversation_id, Conversation.project_id == project.id)
     )
@@ -144,6 +149,7 @@ async def get_single_conversation(
                     "role": m.role,
                     "content": m.content,
                     "suggested_actions": m.suggested_actions or [],
+                    "structured_data": m.structured_data,
                     "created_at": m.created_at.isoformat() if m.created_at else None
                 }
                 for m in db_messages
@@ -165,7 +171,7 @@ async def create_new_conversation(
     conv = Conversation(
         id=new_id,
         project_id=project.id,
-        title=title or f"New Discovery Chat",
+        title=title or "New Discovery Chat",
         module="DISCOVERY"
     )
     db.add(conv)
@@ -175,6 +181,32 @@ async def create_new_conversation(
         success=True,
         data={"id": conv.id, "title": conv.title, "created_at": conv.created_at.isoformat() if conv.created_at else None},
         message="New conversation session created"
+    )
+
+@router.patch("/project/{project_id}/conversation/{conversation_id}", response_model=ApiResponse)
+async def rename_conversation(
+    project_id: str,
+    conversation_id: str,
+    payload: UpdateConversationRequest,
+    project: Project = Depends(require_project_permission(Permission.DISCOVERY_CHAT)),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Rename an existing conversation thread."""
+    conv_res = await db.execute(
+        select(Conversation).filter(Conversation.id == conversation_id, Conversation.project_id == project.id)
+    )
+    conv = conv_res.scalars().first()
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+        
+    conv.title = payload.title.strip()
+    await db.commit()
+    
+    return ApiResponse(
+        success=True,
+        data={"id": conv.id, "title": conv.title},
+        message="Conversation renamed successfully"
     )
 
 @router.delete("/project/{project_id}/conversation/{conversation_id}", response_model=ApiResponse)
@@ -237,6 +269,7 @@ async def get_chat_history(
             "role": m.role,
             "content": m.content,
             "suggested_actions": m.suggested_actions or [],
+            "structured_data": m.structured_data,
             "created_at": m.created_at.isoformat() if m.created_at else None
         }
         for m in db_messages
@@ -281,21 +314,64 @@ async def chat_with_ai_companion(
     req: ChatRequest,
     project: Project = Depends(require_project_permission(Permission.DISCOVERY_CHAT)),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _limiter: None = Depends(rate_limit("chat", settings.CHAT_RATE_LIMIT_PER_MINUTE))
 ):
+    """
+    Main Chatbot Endpoint:
+    - Multi-turn conversation memory
+    - RAG retrieval over project documents and website chunks
+    - Resilient multi-provider routing (Gemini -> Groq -> OpenRouter -> OpenAI -> Azure)
+    - Full persistence of conversations and messages
+    """
+    # 1. Fetch project business context
     ctx_res = await db.execute(select(BusinessContext).filter(BusinessContext.project_id == project.id))
     ctx = ctx_res.scalars().first()
     context_text = ctx.summary if ctx else (project.business_problem or "")
     
     project_context = (
         f"Project Name: {project.name}\n"
-        f"Industry Vertical: {project.industry}\n"
+        f"Industry Vertical: {project.industry or 'Enterprise Services'}\n"
         f"Business Problem Statement: {project.business_problem or 'Operational bottlenecks and legacy manual workflows'}\n"
         f"Business Objectives: {project.business_objective or 'Streamline processes and achieve autonomous straight-through processing'}\n"
+        f"Current Systems: {project.current_systems or 'Spreadsheets, Legacy SQL, Shared Mailboxes'}\n"
+        f"Expected Outcome: {project.expected_outcome or 'Reduce latency from 48h to 15m, 80%+ STP'}\n"
         f"Business Context Summary: {context_text[:1200]}"
     )
 
-    # 1. Find or create persistent conversation
+    # 2. RAG Retrieval from Document Chunks
+    rag_context = ""
+    if settings.CHAT_RAG_ENABLED:
+        try:
+            chunks_res = await db.execute(
+                select(DocumentChunk, Document.filename)
+                .join(Document, DocumentChunk.document_id == Document.id)
+                .filter(Document.project_id == project.id)
+            )
+            all_chunks_raw = chunks_res.all()
+            chunk_dicts = [
+                {
+                    "content": c[0].content,
+                    "filename": c[1],
+                    "page_number": c[0].page_number or 1,
+                    "chunk_index": c[0].chunk_index
+                }
+                for c in all_chunks_raw
+            ]
+            if chunk_dicts:
+                relevant_chunks = search_relevant_chunks(chunk_dicts, req.message, top_k=settings.RAG_TOP_K)
+                if relevant_chunks:
+                    rag_snippets = []
+                    for idx, chk in enumerate(relevant_chunks):
+                        rag_snippets.append(
+                            f"[Source #{idx+1}: {chk['filename']} (Page {chk['page_number']})]\n{chk['content']}"
+                        )
+                    rag_context = "\n\n".join(rag_snippets)
+        except Exception as e:
+            # Non-blocking RAG fallback
+            pass
+
+    # 3. Find or create persistent conversation thread
     conv = None
     if req.conversation_id:
         conv_res = await db.execute(
@@ -312,7 +388,6 @@ async def chat_with_ai_companion(
         conv = conv_res.scalars().first()
         
     if not conv:
-        # Title summarizing user's first query
         clean_title = req.message.strip().split("\n")[0][:40]
         if len(req.message.strip()) > 40:
             clean_title += "..."
@@ -325,14 +400,29 @@ async def chat_with_ai_companion(
         db.add(conv)
         await db.flush()
     else:
-        # If conversation has generic placeholder title, update it to the user's topic
         if conv.title in ["New Discovery Chat", "AI Discovery Session", "Discovery Session", f"{project.name} Discovery Session", f"{project.name} Discovery Chat"]:
             clean_title = req.message.strip().split("\n")[0][:40]
             if len(req.message.strip()) > 40:
                 clean_title += "..."
             conv.title = clean_title
 
-    # 2. Persist User message
+    # 4. Load past messages for multi-turn conversational memory
+    msg_history_res = await db.execute(
+        select(Message)
+        .filter(Message.conversation_id == conv.id)
+        .order_by(Message.created_at.asc())
+    )
+    past_db_messages = msg_history_res.scalars().all()
+    
+    # Format message history (limit to last 10 messages for token efficiency)
+    messages_for_llm: List[Dict[str, str]] = []
+    for m in past_db_messages[-10:]:
+        messages_for_llm.append({"role": m.role, "content": m.content})
+    
+    # Append current user query
+    messages_for_llm.append({"role": "user", "content": req.message})
+
+    # 5. Persist User message
     user_msg_id = str(uuid.uuid4())
     user_msg = Message(
         id=user_msg_id,
@@ -343,10 +433,11 @@ async def chat_with_ai_companion(
     )
     db.add(user_msg)
     
-    # 3. Call AI Companion
-    ai_reply = await orchestrator.chat_companion(
-        message=req.message,
+    # 6. Execute AI Orchestrator with memory & RAG grounding
+    ai_reply, provider_used = await orchestrator.chat_companion(
+        messages=messages_for_llm,
         project_context=project_context,
+        rag_context=rag_context,
         language=req.language or "en"
     )
     
@@ -357,13 +448,20 @@ async def chat_with_ai_companion(
         "Calculate TransformIQ readiness score"
     ]
     
-    # 4. Persist AI Assistant reply
+    structured_metadata = {
+        "ai_provider": provider_used,
+        "rag_sources_count": len(rag_context.split("[Source #")) - 1 if rag_context else 0,
+        "language": req.language or "en"
+    }
+
+    # 7. Persist AI Assistant reply
     assistant_msg_id = str(uuid.uuid4())
     assistant_msg = Message(
         id=assistant_msg_id,
         conversation_id=conv.id,
         role="assistant",
         content=ai_reply,
+        structured_data=structured_metadata,
         suggested_actions=suggested_actions
     )
     db.add(assistant_msg)
@@ -379,7 +477,9 @@ async def chat_with_ai_companion(
             "conversation_id": conv.id,
             "conversation_title": conv.title,
             "project_id": project.id,
-            "suggested_actions": suggested_actions
+            "ai_provider": provider_used,
+            "suggested_actions": suggested_actions,
+            "structured_data": structured_metadata
         },
-        message="AI Companion response generated and saved"
+        message="AI response generated and persisted"
     )
